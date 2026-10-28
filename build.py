@@ -48,18 +48,25 @@ LABELLED = re.compile(r"^\[\s*([^\[\]:：]+?)\s*[:：]\s*(.*?)\s*\]$")
 PLAIN = re.compile(r"^\[\s*([^\[\]]+?)\s*\]$")
 
 TYPE_BITS = [
-    (0x1, "몬스터"), (0x2, "마법"), (0x4, "함정"),
-    (0x10, "일반"), (0x20, "효과"), (0x40, "융합"), (0x80, "의식"),
-    (0x100, "함정 몬스터"), (0x200, "스피릿"), (0x400, "유니온"),
-    (0x800, "듀얼"), (0x1000, "튜너"), (0x2000, "싱크로"), (0x4000, "토큰"),
-    (0x10000, "속공"), (0x20000, "지속"), (0x40000, "장착"), (0x80000, "필드"),
-    (0x100000, "카운터"), (0x200000, "리버스"), (0x400000, "툰"),
-    (0x800000, "엑시즈"), (0x1000000, "펜듈럼"), (0x2000000, "특수 소환"),
-    (0x4000000, "링크"),
+    (0x1, "몬스터", None), (0x2, "마법", "spell"), (0x4, "함정", "trap"),
+    (0x10, "일반", "normal"), (0x20, "효과", "effect"),
+    (0x40, "융합", "fusion"), (0x80, "의식", "ritual"),
+    (0x100, "함정 몬스터", None), (0x200, "스피릿", None),
+    (0x400, "유니온", None), (0x800, "듀얼", None), (0x1000, "튜너", None),
+    (0x2000, "싱크로", "synchro"), (0x4000, "토큰", None),
+    (0x10000, "속공", None), (0x20000, "지속", None), (0x40000, "장착", None),
+    (0x80000, "필드", None), (0x100000, "카운터", None),
+    (0x200000, "리버스", None), (0x400000, "툰", None),
+    (0x800000, "엑시즈", "xyz"), (0x1000000, "펜듈럼", None),
+    (0x2000000, "특수 소환", None), (0x4000000, "링크", "link"),
 ]
 KNOWN_TYPE_MASK = 0
-for _b, _l in TYPE_BITS:
+for _b, _l, _f in TYPE_BITS:
     KNOWN_TYPE_MASK |= _b
+
+# 테두리 색을 고를 때의 우선순위. 앞쪽이 이긴다.
+FRAME_ORDER = ["access", "pairing", "gift", "key", "hijack", "link", "xyz",
+               "synchro", "fusion", "ritual", "spell", "trap", "effect", "normal"]
 
 ATTRIBUTES = [(0x1, "땅"), (0x2, "물"), (0x4, "불"), (0x8, "바람"),
               (0x10, "빛"), (0x20, "어둠"), (0x40, "신")]
@@ -72,7 +79,10 @@ RACES = [
     (0x8000, "야수전사족"), (0x10000, "공룡족"), (0x20000, "어류족"),
     (0x40000, "해룡족"), (0x80000, "파충류족"), (0x100000, "사이킥족"),
     (0x200000, "환신야수족"), (0x400000, "창조신족"), (0x800000, "환룡족"),
-    (0x1000000, "사이버스족"),
+    (0x1000000, "사이버스족"), (0x2000000, "환상마족"), (0x4000000, "사이보그족"),
+    (0x8000000, "마법기사족"), (0x10000000, "고룡족"), (0x20000000, "오메가사이킥족"),
+    (0x40000000, "천위족"), (0x80000000, "갤럭시족"),
+    (0x4000000000000000, "요괴족"),
 ]
 
 LINK_MARKERS = [(0x1, "↙"), (0x2, "↓"), (0x4, "↘"), (0x8, "←"),
@@ -80,7 +90,7 @@ LINK_MARKERS = [(0x1, "↙"), (0x2, "↓"), (0x4, "↘"), (0x8, "←"),
 
 
 def bits(value, table):
-    return [label for bit, label in table if value & bit]
+    return [row[1] for row in table if value & row[0]]
 
 
 def one(value, table):
@@ -151,10 +161,15 @@ def main():
     aliases = pack_meta.get("_aliases", {})
 
     custom_bits = {}
-    for key, label in extra_types.items():
-        if key.startswith("_") or not str(label).strip():
+    for key, spec in extra_types.items():
+        if key.startswith("_"):
             continue
-        custom_bits[int(key, 16)] = str(label).strip()
+        if isinstance(spec, str):
+            spec = {"name": spec}
+        name = str(spec.get("name") or "").strip()
+        if not name:
+            continue
+        custom_bits[int(key, 16)] = {"name": name, "frame": spec.get("frame")}
 
     cdbs = sorted(f for f in os.listdir(ROOT) if f.lower().endswith(".cdb"))
     warnings = []
@@ -188,23 +203,11 @@ def main():
                 seen_ids[row["id"]] = fname
             records.append((fname, row))
 
-<<<<<<< Updated upstream
-            type_value = row["type"]
-            leftover = type_value & ~KNOWN_TYPE_MASK
-            labels = bits(type_value, TYPE_BITS)
-            for bit, label in custom_bits.items():
-                if leftover & bit:
-                    labels.append(label)
-                    leftover &= ~bit
-            if leftover:
-                unknown_bits[hex(leftover)] += 1
-=======
     # 해방면(UNLOCKED)은 alias 로 앞면을 가리킨다
     backs = {}
     for fname, row in records:
         if row["type"] & TYPE_UNLOCKED and row["alias"]:
             backs[row["alias"]] = (fname, row)
->>>>>>> Stashed changes
 
     def describe(fname, row, meta):
         """한 행을 카드 dict 로 만든다."""
@@ -222,40 +225,6 @@ def main():
             unknown_bits[hex(leftover)] += 1
         frame = next((f for f in FRAME_ORDER if f in frames), "effect")
 
-<<<<<<< Updated upstream
-            card = {
-                "id": row["id"],
-                "name": row["name"],
-                "number": meta["number"],
-                "seq": meta["seq"],
-                "text": body,
-                "types": labels,
-                "source": fname,
-            }
-            if meta["pack_name"]:
-                card["_packname"] = meta["pack_name"]
-            if meta["credits"]:
-                card["credits"] = meta["credits"]
-            if meta["labels"]:
-                card["labels"] = {k: v for k, v in meta["labels"].items()}
-            if row["alias"]:
-                card["alias"] = row["alias"]
-            if is_monster:
-                card["atk"] = row["atk"]
-                card["attribute"] = one(row["attribute"], ATTRIBUTES)
-                card["race"] = one(row["race"], RACES)
-                if is_link:
-                    card["link"] = level_value & 0xFF
-                    card["markers"] = bits(row["def"] or 0, LINK_MARKERS)
-                else:
-                    card["def"] = row["def"]
-                    card["level"] = level_value & 0xFF
-                    lscale = (level_value >> 24) & 0xFF
-                    rscale = (level_value >> 16) & 0xFF
-                    if lscale or rscale:
-                        card["scale"] = [lscale, rscale]
-            packs[code].append(card)
-=======
         is_link = bool(type_value & 0x4000000)
         is_monster = bool(type_value & 0x1)
         level_value = row["level"] or 0
@@ -326,7 +295,6 @@ def main():
             warnings.append(f"{fname}: 키 카드 {row['name']} 의 해방면을 찾지 못했다")
 
         packs[code].append(card)
->>>>>>> Stashed changes
 
     # ---- 이미지 ----
     os.makedirs(os.path.join(DIST, "img"), exist_ok=True)
@@ -389,7 +357,7 @@ def main():
             "name": name,
             "released": released,
             "count": len(cards),
-            "cover": cards[0].get("img") if cards else None,
+            "covers": [c["img"] for c in cards[:3] if c.get("img")],
         }
         index.append(entry)
         with open(os.path.join(DIST, "data", f"pack-{code}.json"), "w",
