@@ -1,0 +1,16 @@
+{
+  "_주석": "팩 표시 이름과 발매일. 이름은 효과 설명에서 자동으로 뽑히므로 비워두면 그걸 쓴다. 발매일은 어디에도 없어서 여기에만 적는다.",
+  "_aliases": {
+    "RTH1": "RHT1"
+  },
+  "POG1": { "released": "" },
+  "POG2": { "released": "" },
+  "ATH1": { "name": "", "released": "" },
+  "ATH2": { "name": "", "released": "" },
+  "ATH3": { "released": "" },
+  "ATL1": { "released": "" },
+  "ACCL": { "released": "" },
+  "LSGD": { "name": "", "released": "" },
+  "POTC": { "name": "", "released": "" },
+  "RHT1": { "name": "", "released": "" }
+}

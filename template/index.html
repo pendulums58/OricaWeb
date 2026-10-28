@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AMCTOrica 팩 목록</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans+KR:wght@400;500;600;700&display=swap">
+<style>
+:root{
+  --bg:#eef2f5; --surface:#fff; --surface-2:#e3e9ee;
+  --fg:#111920; --fg-dim:#58656f; --fg-faint:#8795a0;
+  --line:#ccd6dd; --line-soft:#dde4ea;
+  --accent:#0a7c89; --accent-soft:#d3eef1;
+  --font-body:"IBM Plex Sans KR",system-ui,-apple-system,"Malgun Gothic",sans-serif;
+  --font-mono:"IBM Plex Mono",ui-monospace,Menlo,monospace;
+}
+@media (prefers-color-scheme:dark){:root{
+  --bg:#0c1216; --surface:#151e24; --surface-2:#1d282f;
+  --fg:#e4ecf1; --fg-dim:#8d9ca8; --fg-faint:#6b7c88;
+  --line:#2a373f; --line-soft:#212d34;
+  --accent:#36cfdf; --accent-soft:#113038;
+  color-scheme:dark;
+}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--font-body);font-size:14px;line-height:1.55}
+a{color:inherit}
+button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.wrap{max-width:1080px;margin:0 auto;padding:0 max(16px,env(safe-area-inset-left,0px))}
+header.top{border-bottom:1px solid var(--line);background:var(--surface);position:sticky;top:0;z-index:5}
+header.top .wrap{display:flex;align-items:baseline;gap:12px;padding-block:14px;flex-wrap:wrap}
+h1{margin:0;font-size:17px;font-weight:700;letter-spacing:-.01em}
+h1 em{font-style:normal;color:var(--accent)}
+.sub{font-family:var(--font-mono);font-size:11px;color:var(--fg-faint)}
+main{padding-block:22px 48px}
+.packgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:14px;list-style:none;margin:0;padding:0}
+.packcard{background:var(--surface);border:1px solid var(--line);border-radius:12px;overflow:hidden;display:flex;flex-direction:column;width:100%;text-align:left;transition:border-color .12s,transform .08s}
+.packcard:hover{border-color:var(--accent);transform:translateY(-2px)}
+.packcard .cover{aspect-ratio:16/9;background:var(--surface-2);overflow:hidden;display:flex;align-items:center;justify-content:center}
+.packcard .cover img{width:100%;height:100%;object-fit:cover;object-position:center 28%}
+.packcard .body{padding:11px 13px 13px;display:flex;flex-direction:column;gap:3px}
+.packcard .code{font-family:var(--font-mono);font-size:10.5px;letter-spacing:.06em;color:var(--accent)}
+.packcard .nm{font-size:14px;font-weight:600;line-height:1.3}
+.packcard .meta{font-family:var(--font-mono);font-size:11px;color:var(--fg-faint)}
+.backrow{display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap}
+.back{font-size:12.5px;color:var(--fg-dim);display:inline-flex;align-items:center;gap:5px;border:1px solid var(--line);border-radius:8px;padding:5px 11px;background:var(--surface)}
+.back:hover{border-color:var(--accent);color:var(--accent)}
+.packhead{margin-bottom:18px}
+.packhead h2{margin:0 0 4px;font-size:21px;font-weight:700;letter-spacing:-.01em;text-wrap:balance}
+.packhead .line{font-family:var(--font-mono);font-size:11.5px;color:var(--fg-dim);display:flex;gap:12px;flex-wrap:wrap}
+.filter{width:100%;max-width:320px;height:34px;padding:0 12px;border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--fg);font:inherit;font-size:13px;margin-bottom:16px}
+.filter:focus{border-color:var(--accent);outline:none}
+.cardgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(132px,1fr));gap:12px;list-style:none;margin:0;padding:0}
+.cardcell{background:var(--surface);border:1px solid var(--line);border-radius:10px;overflow:hidden;display:flex;flex-direction:column;width:100%;text-align:left;transition:border-color .12s,transform .08s}
+.cardcell:hover{border-color:var(--accent);transform:translateY(-2px)}
+.cardcell .pic{aspect-ratio:59/86;background:var(--surface-2)}
+.cardcell .pic img{width:100%;height:100%;object-fit:cover;display:block}
+.cardcell .cap{padding:7px 8px 9px;display:flex;flex-direction:column;gap:2px;min-width:0}
+.cardcell .no{font-family:var(--font-mono);font-size:9.5px;color:var(--fg-faint);letter-spacing:.03em}
+.cardcell .nm{font-size:11.5px;font-weight:600;line-height:1.25;overflow-wrap:anywhere}
+dialog{border:none;padding:0;background:transparent;max-width:none;max-height:none}
+dialog::backdrop{background:rgba(5,12,16,.6)}
+.modal{background:var(--surface);border:1px solid var(--line);border-radius:14px;width:min(640px,94vw);max-height:88vh;overflow-y:auto;color:var(--fg)}
+.modal .inner{padding:18px}
+.modal .close{position:sticky;top:0;float:right;font-size:13px;color:var(--fg-dim);padding:4px 8px;border-radius:7px}
+.modal .close:hover{background:var(--surface-2)}
+.dhead{display:flex;gap:14px;align-items:flex-start;margin-bottom:14px;flex-wrap:wrap}
+.dhead img{width:118px;border-radius:7px;border:1px solid var(--line)}
+.dhead .t{flex:1;min-width:180px}
+.dhead h3{margin:0 0 4px;font-size:17px;font-weight:700;line-height:1.3}
+.dhead .no{font-family:var(--font-mono);font-size:11.5px;color:var(--accent)}
+.dhead .ty{font-size:12px;color:var(--fg-dim);margin-top:5px}
+.stats{font-family:var(--font-mono);font-size:12px;color:var(--fg-dim);margin-top:6px}
+.ctext{background:var(--surface-2);border-radius:9px;padding:12px 13px;font-size:12.8px;line-height:1.65;white-space:pre-wrap;margin-bottom:12px}
+.tagrow{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px}
+.tag{font-size:11px;background:var(--accent-soft);color:var(--accent);border-radius:999px;padding:3px 9px}
+.tag.grey{background:var(--surface-2);color:var(--fg-dim)}
+.note{font-size:11.5px;color:var(--fg-faint)}
+footer{border-top:1px solid var(--line-soft);margin-top:40px}
+footer .wrap{padding-block:18px 32px;font-size:11.5px;color:var(--fg-faint)}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<header class="top"><div class="wrap">
+  <h1><a href="#" style="text-decoration:none">AMCT<em>Orica</em></a></h1>
+  <span class="sub" id="topsub"></span>
+</div></header>
+
+<main class="wrap" id="view"></main>
+
+<footer><div class="wrap">
+  효과 설명 끝의 카드 번호를 기준으로 묶었다. 번호가 없는 카드는 아직 팩으로 묶이지 않아 여기 나오지 않는다.
+</div></footer>
+
+<dialog id="cardModal"><div class="modal"><div class="inner" id="modalBody"></div></div></dialog>
+
+<script>
+const view = document.getElementById("view");
+const topsub = document.getElementById("topsub");
+const modal = document.getElementById("cardModal");
+const modalBody = document.getElementById("modalBody");
+let packs = [];
+const cache = new Map();
+
+const el = (tag, cls, text) => {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text != null) n.textContent = text;
+  return n;
+};
+const fmtDate = d => d ? d : "발매일 미기재";
+
+async function loadPacks() {
+  const res = await fetch("data/packs.json");
+  packs = await res.json();
+  topsub.textContent = `팩 ${packs.length} · 카드 ${packs.reduce((a, p) => a + p.count, 0)}`;
+}
+
+function renderList() {
+  document.title = "AMCTOrica 팩 목록";
+  view.textContent = "";
+  const ul = el("ul", "packgrid");
+  for (const p of packs) {
+    const li = el("li");
+    const b = el("button", "packcard");
+    const cover = el("div", "cover");
+    if (p.cover) {
+      const img = el("img");
+      img.src = p.cover; img.alt = ""; img.loading = "lazy";
+      cover.append(img);
+    }
+    const body = el("div", "body");
+    body.append(el("span", "code", p.code),
+                el("span", "nm", p.name),
+                el("span", "meta", `${p.count}장 · ${fmtDate(p.released)}`));
+    b.append(cover, body);
+    b.addEventListener("click", () => { location.hash = p.code; });
+    li.append(b);
+    ul.append(li);
+  }
+  view.append(ul);
+}
+
+async function renderPack(code) {
+  const pack = packs.find(p => p.code === code);
+  if (!pack) { location.hash = ""; return; }
+  if (!cache.has(code)) {
+    const res = await fetch(`data/pack-${code}.json`);
+    cache.set(code, await res.json());
+  }
+  const data = cache.get(code);
+  document.title = `${data.name} — AMCTOrica`;
+  view.textContent = "";
+
+  const row = el("div", "backrow");
+  const back = el("a", "back", "← 팩 목록");
+  back.href = "#";
+  row.append(back);
+
+  const head = el("div", "packhead");
+  head.append(el("h2", null, data.name));
+  const line = el("div", "line");
+  line.append(el("span", null, data.code),
+              el("span", null, `${data.count}장`),
+              el("span", null, fmtDate(data.released)));
+  head.append(line);
+
+  const filter = el("input", "filter");
+  filter.type = "search";
+  filter.placeholder = "카드명 · 번호 · 텍스트 검색";
+
+  const ul = el("ul", "cardgrid");
+  const draw = q => {
+    ul.textContent = "";
+    const needle = q.trim().toLowerCase();
+    const hits = data.cards.filter(c => !needle ||
+      c.name.toLowerCase().includes(needle) ||
+      c.number.toLowerCase().includes(needle) ||
+      (c.text || "").toLowerCase().includes(needle));
+    if (!hits.length) {
+      ul.append(el("li", "note", "조건에 맞는 카드가 없다."));
+      return;
+    }
+    for (const c of hits) ul.append(cardCell(c));
+  };
+  filter.addEventListener("input", () => draw(filter.value));
+
+  view.append(row, head, filter, ul);
+  draw("");
+}
+
+function cardCell(c) {
+  const li = el("li");
+  const b = el("button", "cardcell");
+  const pic = el("div", "pic");
+  if (c.img) {
+    const img = el("img");
+    img.src = c.img; img.alt = c.name; img.loading = "lazy";
+    pic.append(img);
+  }
+  const cap = el("div", "cap");
+  cap.append(el("span", "no", c.number), el("span", "nm", c.name));
+  b.append(pic, cap);
+  b.addEventListener("click", () => openCard(c));
+  li.append(b);
+  return li;
+}
+
+function openCard(c) {
+  modalBody.textContent = "";
+  const close = el("button", "close", "닫기");
+  close.addEventListener("click", () => modal.close());
+  modalBody.append(close);
+
+  const head = el("div", "dhead");
+  if (c.img) {
+    const img = el("img");
+    img.src = c.img; img.alt = c.name;
+    head.append(img);
+  }
+  const t = el("div", "t");
+  t.append(el("div", "no", c.number), el("h3", null, c.name));
+  t.append(el("div", "ty", (c.types || []).join(" / ")));
+  const bits = [];
+  if (c.attribute) bits.push(c.attribute);
+  if (c.race) bits.push(c.race);
+  if (c.link != null) bits.push(`LINK-${c.link}`);
+  else if (c.level != null) bits.push(`레벨 ${c.level}`);
+  if (c.scale) bits.push(`스케일 ${c.scale[0]}/${c.scale[1]}`);
+  if (c.atk != null) bits.push(c.link != null ? `${c.atk}` : `${c.atk} / ${c.def}`);
+  if (c.markers && c.markers.length) bits.push(c.markers.join(" "));
+  if (bits.length) t.append(el("div", "stats", bits.join("   ")));
+  head.append(t);
+  modalBody.append(head);
+
+  if (c.text) modalBody.append(el("div", "ctext", c.text));
+
+  const tags = el("div", "tagrow");
+  for (const [k, vals] of Object.entries(c.labels || {}))
+    for (const v of vals) tags.append(el("span", "tag", `${k} ${v}`));
+  for (const cr of c.credits || []) tags.append(el("span", "tag grey", cr));
+  if (tags.children.length) modalBody.append(tags);
+
+  const note = el("div", "note");
+  note.textContent = `#${c.id}` + (c.alias ? ` · 다른 그림 (원본 ${c.alias})` : "") + ` · ${c.source}`;
+  modalBody.append(note);
+
+  modal.showModal();
+}
+
+function route() {
+  const code = decodeURIComponent(location.hash.replace(/^#/, ""));
+  if (code) renderPack(code); else renderList();
+  window.scrollTo(0, 0);
+}
+window.addEventListener("hashchange", route);
+loadPacks().then(route).catch(err => {
+  view.append(el("p", "note", "데이터를 불러오지 못했다: " + err.message));
+});
+</script>
+</body>
+</html>
