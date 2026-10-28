@@ -76,9 +76,26 @@ dialog::backdrop{background:rgba(5,12,16,.6)}
 .tagrow{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px}
 .tag{font-size:11px;background:var(--accent-soft);color:var(--accent);border-radius:999px;padding:3px 9px}
 .tag.grey{background:var(--surface-2);color:var(--fg-dim)}
+<<<<<<< Updated upstream
 .note{font-size:11.5px;color:var(--fg-faint)}
 footer{border-top:1px solid var(--line-soft);margin-top:40px}
 footer .wrap{padding-block:18px 32px;font-size:11.5px;color:var(--fg-faint)}
+=======
+.tag.frame{background:color-mix(in srgb,var(--fc) 16%,transparent);color:var(--fc)}
+.note{font-family:var(--font-mono);font-size:10.5px;color:var(--fg-faint)}
+.flipbtn{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:500;
+  border:1px solid var(--line);border-radius:999px;padding:5px 13px;background:var(--surface-2);color:var(--fg-dim)}
+.flipbtn:hover{border-color:var(--accent);color:var(--accent)}
+.flipbtn .sw{font-family:var(--font-mono);font-size:13px;line-height:1}
+.facetag{font-size:10.5px;font-family:var(--font-mono);letter-spacing:.06em;color:var(--fg-faint);
+  border:1px solid var(--line);border-radius:999px;padding:2px 9px}
+.facetag.on{color:var(--fc);border-color:var(--fc)}
+.twoside{position:absolute;left:6px;bottom:6px;font-size:9.5px;font-family:var(--font-mono);
+  background:rgba(8,14,18,.72);color:#fff;border-radius:999px;padding:2px 7px;letter-spacing:.04em}
+.empty{padding:40px 10px;text-align:center;color:var(--fg-faint);font-size:13px;grid-column:1/-1}
+footer{border-top:1px solid var(--line-soft);margin-top:46px}
+footer .wrap{padding-block:20px 36px;font-size:11.5px;color:var(--fg-faint);line-height:1.7}
+>>>>>>> Stashed changes
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
 </head>
@@ -195,11 +212,20 @@ function cardCell(c) {
   const li = el("li");
   const b = el("button", "cardcell");
   const pic = el("div", "pic");
+<<<<<<< Updated upstream
   if (c.img) {
     const img = el("img");
     img.src = c.img; img.alt = c.name; img.loading = "lazy";
     pic.append(img);
   }
+=======
+  if (c.img) { const im = el("img"); im.src = c.img; im.alt = c.name; im.loading = "lazy"; pic.append(im); }
+  const badge = attrBadge(c.attribute);
+  if (badge) pic.append(badge);
+  if (c.back) pic.append(el("span", "twoside", "양면"));
+  b.append(pic);
+
+>>>>>>> Stashed changes
   const cap = el("div", "cap");
   cap.append(el("span", "no", c.number), el("span", "nm", c.name));
   b.append(pic, cap);
@@ -208,8 +234,20 @@ function cardCell(c) {
   return li;
 }
 
+let openState = null;
+
 function openCard(c) {
+  openState = { card: c, flipped: false };
+  paintCard();
+  modal.showModal();
+}
+
+function paintCard() {
+  const { card, flipped } = openState;
+  const face = flipped && card.back ? card.back : card;
+  const fc = frameVar(face);
   modalBody.textContent = "";
+<<<<<<< Updated upstream
   const close = el("button", "close", "닫기");
   close.addEventListener("click", () => modal.close());
   modalBody.append(close);
@@ -233,13 +271,69 @@ function openCard(c) {
   if (c.markers && c.markers.length) bits.push(c.markers.join(" "));
   if (bits.length) t.append(el("div", "stats", bits.join("   ")));
   head.append(t);
+=======
+  mtop.style.background = fc;
+  modalBody.style.setProperty("--fc", fc);
+
+  const cr = el("div", "closerow");
+  const close = el("button", "close", "닫기");
+  close.addEventListener("click", () => modal.close());
+  cr.append(close);
+  modalBody.append(cr);
+
+  const head = el("div", "dhead");
+  if (face.img) {
+    const art = el("div", "art");
+    const im = el("img"); im.src = face.img; im.alt = face.name;
+    art.append(im); head.append(art);
+  }
+  const info = el("div", "dinfo");
+  info.append(el("div", "dnum", card.number), el("h3", null, face.name));
+
+  if (card.back) {
+    const row = el("div", "drow");
+    const tag = el("span", "facetag on", flipped ? "해방면" : "앞면");
+    const flip = el("button", "flipbtn");
+    flip.append(el("span", "sw", "⇄"),
+                document.createTextNode(flipped ? "앞면 보기" : "해방면 보기"));
+    flip.addEventListener("click", () => { openState.flipped = !flipped; paintCard(); });
+    row.append(tag, flip);
+    info.append(row);
+  }
+
+  const r1 = el("div", "drow");
+  const badge = attrBadge(face.attribute, true);
+  if (badge) r1.append(badge);
+  if (face.link != null) { r1.append(linkGrid(face.markers)); r1.append(el("span", "mono", `LINK-${face.link}`)); }
+  else if (face.level != null) r1.append(starRow(face.level, face.types.includes("엑시즈")));
+  if (face.scale) r1.append(el("span", "mono", `스케일 ${face.scale[0]} / ${face.scale[1]}`));
+  if (r1.children.length) info.append(r1);
+
+  const tl = el("div", "typeline");
+  tl.append(el("b", null, face.types.join(" / ")));
+  if (face.race) tl.append(document.createTextNode("   " + face.race));
+  info.append(tl);
+
+  if (face.atk != null) {
+    const ad = el("div", "atkdef");
+    const a = el("div"); a.append(el("span", null, "ATK"), el("b", null, face.atk < 0 ? "?" : String(face.atk)));
+    ad.append(a);
+    if (face.link == null) {
+      const d = el("div"); d.append(el("span", null, "DEF"), el("b", null, face.def < 0 ? "?" : String(face.def)));
+      ad.append(d);
+    }
+    info.append(ad);
+  }
+  head.append(info);
+>>>>>>> Stashed changes
   modalBody.append(head);
 
-  if (c.text) modalBody.append(el("div", "ctext", c.text));
+  if (face.text) modalBody.append(el("div", "ctext", face.text));
 
   const tags = el("div", "tagrow");
-  for (const [k, vals] of Object.entries(c.labels || {}))
+  for (const [k, vals] of Object.entries(face.labels || {}))
     for (const v of vals) tags.append(el("span", "tag", `${k} ${v}`));
+<<<<<<< Updated upstream
   for (const cr of c.credits || []) tags.append(el("span", "tag grey", cr));
   if (tags.children.length) modalBody.append(tags);
 
@@ -248,6 +342,13 @@ function openCard(c) {
   modalBody.append(note);
 
   modal.showModal();
+=======
+  for (const cc of face.credits || card.credits || []) tags.append(el("span", "tag grey", cc));
+  if (tags.children.length) modalBody.append(tags);
+
+  modalBody.append(el("div", "note",
+    `#${face.id}` + (card.alias ? ` · 다른 그림 (원본 ${card.alias})` : "") + ` · ${face.source}`));
+>>>>>>> Stashed changes
 }
 
 function route() {
@@ -256,9 +357,20 @@ function route() {
   window.scrollTo(0, 0);
 }
 window.addEventListener("hashchange", route);
+<<<<<<< Updated upstream
 loadPacks().then(route).catch(err => {
   view.append(el("p", "note", "데이터를 불러오지 못했다: " + err.message));
 });
+=======
+modal.addEventListener("click", e => { if (e.target === modal) modal.close(); });
+modal.addEventListener("close", () => { openState = null; });
+document.addEventListener("keydown", e => {
+  if (e.key.toLowerCase() === "f" && openState && openState.card.back && modal.open) {
+    openState.flipped = !openState.flipped; paintCard();
+  }
+});
+loadPacks().then(route).catch(err => view.append(el("p", "empty", "데이터를 불러오지 못했다: " + err.message)));
+>>>>>>> Stashed changes
 </script>
 </body>
 </html>

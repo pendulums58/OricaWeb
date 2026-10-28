@@ -157,12 +157,15 @@ def main():
         custom_bits[int(key, 16)] = str(label).strip()
 
     cdbs = sorted(f for f in os.listdir(ROOT) if f.lower().endswith(".cdb"))
-    packs = collections.defaultdict(list)
     warnings = []
     unknown_bits = collections.Counter()
-    skipped = 0
     seen_ids = {}
 
+    TYPE_UNLOCKED = 0x8000
+    TYPE_KEY = 0x8
+
+    # --- 1패스: 모든 cdb 의 모든 행을 읽는다 (뒷면은 번호가 없을 수 있다) ---
+    records = []
     for fname in cdbs:
         path = os.path.join(ROOT, fname)
         con = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
@@ -177,25 +180,15 @@ def main():
             continue
         finally:
             con.close()
-
         for row in rows:
-            body, meta_lines = split_desc(row["desc"])
-            meta = parse_meta(meta_lines)
-            if not meta["number"]:
-                skipped += 1
-                continue
-
-            code = aliases.get(meta["code"], meta["code"])
-            if code != meta["code"]:
-                warnings.append(
-                    f"{fname}: {row['name']} 의 번호 {meta['number']} 를 {code} 로 보정했다")
-
             if row["id"] in seen_ids:
                 warnings.append(
                     f"ID {row['id']} 가 {seen_ids[row['id']]} 와 {fname} 양쪽에 있다")
             else:
                 seen_ids[row["id"]] = fname
+            records.append((fname, row))
 
+<<<<<<< Updated upstream
             type_value = row["type"]
             leftover = type_value & ~KNOWN_TYPE_MASK
             labels = bits(type_value, TYPE_BITS)
@@ -205,11 +198,31 @@ def main():
                     leftover &= ~bit
             if leftover:
                 unknown_bits[hex(leftover)] += 1
+=======
+    # 해방면(UNLOCKED)은 alias 로 앞면을 가리킨다
+    backs = {}
+    for fname, row in records:
+        if row["type"] & TYPE_UNLOCKED and row["alias"]:
+            backs[row["alias"]] = (fname, row)
+>>>>>>> Stashed changes
 
-            is_link = bool(type_value & 0x4000000)
-            is_monster = bool(type_value & 0x1)
-            level_value = row["level"] or 0
+    def describe(fname, row, meta):
+        """한 행을 카드 dict 로 만든다."""
+        type_value = row["type"]
+        leftover = type_value & ~KNOWN_TYPE_MASK
+        labels = bits(type_value, TYPE_BITS)
+        frames = [r[2] for r in TYPE_BITS if type_value & r[0] and r[2]]
+        for bit, spec in custom_bits.items():
+            if leftover & bit:
+                labels.append(spec["name"])
+                if spec.get("frame"):
+                    frames.append(spec["frame"])
+                leftover &= ~bit
+        if leftover:
+            unknown_bits[hex(leftover)] += 1
+        frame = next((f for f in FRAME_ORDER if f in frames), "effect")
 
+<<<<<<< Updated upstream
             card = {
                 "id": row["id"],
                 "name": row["name"],
@@ -242,6 +255,78 @@ def main():
                     if lscale or rscale:
                         card["scale"] = [lscale, rscale]
             packs[code].append(card)
+=======
+        is_link = bool(type_value & 0x4000000)
+        is_monster = bool(type_value & 0x1)
+        level_value = row["level"] or 0
+
+        card = {
+            "id": row["id"],
+            "name": row["name"],
+            "text": meta["body"],
+            "types": labels,
+            "frame": frame,
+            "source": fname,
+        }
+        if meta.get("number"):
+            card["number"] = meta["number"]
+            card["seq"] = meta["seq"]
+        if meta["credits"]:
+            card["credits"] = meta["credits"]
+        if meta["labels"]:
+            card["labels"] = dict(meta["labels"])
+        if is_monster:
+            card["atk"] = row["atk"]
+            card["attribute"] = one(row["attribute"], ATTRIBUTES)
+            card["race"] = one(row["race"], RACES)
+            if is_link:
+                card["link"] = level_value & 0xFF
+                card["markers"] = bits(row["def"] or 0, LINK_MARKERS)
+            else:
+                card["def"] = row["def"]
+                card["level"] = level_value & 0xFF
+                lscale = (level_value >> 24) & 0xFF
+                rscale = (level_value >> 16) & 0xFF
+                if lscale or rscale:
+                    card["scale"] = [lscale, rscale]
+        return card
+
+    # --- 2패스: 번호가 있는 앞면만 팩에 넣는다 ---
+    packs = collections.defaultdict(list)
+    skipped = 0
+    for fname, row in records:
+        if row["type"] & TYPE_UNLOCKED:
+            continue  # 해방면은 앞면에 붙여서 내보낸다
+        body, meta_lines = split_desc(row["desc"])
+        meta = parse_meta(meta_lines)
+        meta["body"] = body
+        if not meta["number"]:
+            skipped += 1
+            continue
+
+        code = aliases.get(meta["code"], meta["code"])
+        if code != meta["code"]:
+            warnings.append(
+                f"{fname}: {row['name']} 의 번호 {meta['number']} 를 {code} 로 보정했다")
+
+        card = describe(fname, row, meta)
+        if meta["pack_name"]:
+            card["_packname"] = meta["pack_name"]
+        if row["alias"]:
+            card["alias"] = row["alias"]
+
+        back = backs.get(row["id"])
+        if back:
+            bfname, brow = back
+            bbody, bmeta_lines = split_desc(brow["desc"])
+            bmeta = parse_meta(bmeta_lines)
+            bmeta["body"] = bbody
+            card["back"] = describe(bfname, brow, bmeta)
+        elif row["type"] & TYPE_KEY:
+            warnings.append(f"{fname}: 키 카드 {row['name']} 의 해방면을 찾지 못했다")
+
+        packs[code].append(card)
+>>>>>>> Stashed changes
 
     # ---- 이미지 ----
     os.makedirs(os.path.join(DIST, "img"), exist_ok=True)
@@ -254,8 +339,14 @@ def main():
 
     copied = 0
     missing = []
+    targets = []
     for cards in packs.values():
         for card in cards:
+            targets.append(card)
+            if card.get("back"):
+                targets.append(card["back"])
+    for card in targets:
+        if True:
             src = None
             for ext in (".jpg", ".png", ".jpeg", ".webp"):
                 candidate = os.path.join(PICS, f"{card['id']}{ext}")
@@ -263,7 +354,7 @@ def main():
                     src = candidate
                     break
             if not src:
-                missing.append(card["number"])
+                missing.append(card.get("number") or str(card["id"]))
                 continue
             if have_pil:
                 with Image.open(src) as im:
