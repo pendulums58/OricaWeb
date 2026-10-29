@@ -5,6 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>CyanPro Card Database</title>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="preconnect" href="https://raw.githubusercontent.com">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.2/sql-wasm.js"></script>
+<script src="decode.js"></script>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+KR:wght@400;500;600;700&display=swap">
 <style>
 :root{
@@ -56,6 +59,33 @@ header.top .brandrow{display:flex;align-items:center;gap:12px;padding-block:13px
 .refresh .sp{display:inline-block;font-family:var(--font-mono);font-size:12px;line-height:1}
 .refresh.spin .sp{animation:rot .7s linear infinite}
 @keyframes rot{to{transform:rotate(360deg)}}
+.loading{padding:46px 10px;text-align:center;color:var(--fg-dim);font-size:13px}
+.loading .barwrap{max-width:280px;margin:14px auto 0;height:5px;border-radius:3px;
+  background:var(--surface-3);overflow:hidden}
+.loading .barwrap i{display:block;height:100%;background:var(--accent);width:0;transition:width .25s}
+.loading .step{font-family:var(--font-mono);font-size:11px;color:var(--fg-faint);margin-top:9px}
+.livetag{font-family:var(--font-mono);font-size:10px;letter-spacing:.06em;color:var(--accent);
+  border:1px solid var(--accent);border-radius:999px;padding:1px 7px;white-space:nowrap}
+.gear{display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;
+  border:1px solid var(--line);border-radius:8px;background:var(--surface-2);color:var(--fg-dim);font-size:13px}
+.gear:hover{border-color:var(--accent);color:var(--accent)}
+.adminpanel{border:1px solid var(--line);border-radius:11px;background:var(--surface);
+  padding:14px 16px;margin:0 0 18px}
+.adminpanel h3{margin:0 0 6px;font-size:13px;font-weight:700}
+.adminpanel p{margin:0 0 10px;font-size:12.2px;line-height:1.6;color:var(--fg-dim)}
+.adminrow{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.adminrow input{flex:1;min-width:200px;height:34px;padding:0 11px;border:1px solid var(--line);
+  border-radius:8px;background:var(--surface-2);color:var(--fg);font-family:var(--font-mono);font-size:12px}
+.adminrow input:focus{border-color:var(--accent);outline:none}
+.abtn{height:34px;padding:0 14px;border:1px solid var(--line);border-radius:8px;
+  background:var(--surface-2);font-size:12.5px;font-weight:500;white-space:nowrap}
+.abtn:hover{border-color:var(--accent);color:var(--accent)}
+.abtn[disabled]{opacity:.5;cursor:default}
+.abtn.go{background:var(--accent);border-color:var(--accent);color:#fff}
+.abtn.go:hover{color:#fff;filter:brightness(1.08)}
+.astatus{font-size:12px;color:var(--fg-dim);margin-top:9px;min-height:17px}
+.astatus.err{color:var(--f-trap)}
+.astatus.ok{color:var(--good,#2f8f54)}
 .builtat{font-family:var(--font-mono);font-size:10.5px;color:var(--fg-faint);white-space:nowrap}
 .tabs{display:flex;gap:2px;overflow-x:auto;scrollbar-width:none}
 .tabs::-webkit-scrollbar{display:none}
@@ -262,10 +292,12 @@ footer .wrap{padding-block:20px 36px;font-size:11.5px;color:var(--fg-faint);line
     <button class="refresh" id="refreshBtn" title="카드 데이터를 다시 받아온다">
       <span class="sp">⟳</span><span id="refreshLabel">새로고침</span>
     </button>
+    <button class="gear" id="gearBtn" title="관리" aria-label="관리">⚙</button>
   </div>
   <nav class="wrap tabs" id="tabs" aria-label="주요 화면"></nav>
 </header>
 
+<div class="wrap"><div id="adminHost" hidden></div></div>
 <main class="wrap" id="view"></main>
 
 <footer><div class="wrap">
@@ -346,55 +378,179 @@ function linkGrid(markers) {
   return g;
 }
 
-// 빌드 시각을 모든 데이터 URL 에 붙인다. 새 빌드가 올라가면 URL 이 바뀌므로
-// 목록만 새 것이고 상세는 캐시된 옛날 것인 상태가 생기지 않는다.
-let dataVersion = "";
+/* ---------- 라이브 로딩 ---------- */
+/* cdb 를 GitHub 에서 직접 받아 브라우저에서 해석한다. 빌드를 기다리지 않는다. */
 
-const grab = async (path, fallback) => {
-  try {
-    const url = dataVersion ? `${path}?v=${encodeURIComponent(dataVersion)}` : path;
-    return await (await fetch(url)).json();
-  } catch { return fallback; }
+let CONFIG = null;
+let loadedAt = null;
+let buildWarnings = [];
+
+const RAW = (r, path) =>
+  `https://raw.githubusercontent.com/${r.owner}/${r.repo}/${r.branch}/${path}`;
+
+const grabJson = async (path, fallback) => {
+  try { return await (await fetch(path, { cache: "no-cache" })).json(); }
+  catch { return fallback; }
 };
 
-// report.json 만은 항상 캐시를 건너뛰고 받아 와, 지금 서버에 있는 빌드가 무엇인지 확인한다.
-const grabReport = async () => {
+const grabText = async (url) => {
   try {
-    return await (await fetch(`report.json?t=${Date.now()}`, { cache: "no-store" })).json();
+    const res = await fetch(url, { cache: "no-cache" });
+    return res.ok ? await res.text() : null;
   } catch { return null; }
 };
 
-function showBuiltAt(report) {
+function showProgress(label, pct) {
+  const host = document.getElementById("view");
+  let box = host.querySelector(".loading");
+  if (!box) {
+    host.textContent = "";
+    box = el("div", "loading");
+    box.append(el("div", null, "카드 데이터를 불러오는 중"));
+    const wrap = el("div", "barwrap");
+    wrap.append(el("i"));
+    box.append(wrap, el("div", "step"));
+    host.append(box);
+  }
+  box.querySelector(".barwrap i").style.width = Math.round(pct * 100) + "%";
+  box.querySelector(".step").textContent = label;
+}
+
+function showBuiltAt() {
   const host = document.getElementById("builtat");
-  if (!report || !report.built_at) { host.textContent = ""; return; }
-  const t = new Date(report.built_at);
-  const mins = Math.floor((Date.now() - t.getTime()) / 60000);
-  const ago = mins < 1 ? "방금" : mins < 60 ? `${mins}분 전`
-            : mins < 1440 ? `${Math.floor(mins / 60)}시간 전`
-            : `${Math.floor(mins / 1440)}일 전`;
-  host.textContent = `갱신 ${ago}`;
-  host.title = t.toLocaleString("ko-KR");
+  if (!loadedAt) { host.textContent = ""; return; }
+  const mins = Math.floor((Date.now() - loadedAt) / 60000);
+  host.textContent = mins < 1 ? "방금 읽음" : `${mins}분 전 읽음`;
+  host.title = new Date(loadedAt).toLocaleString("ko-KR");
+}
+
+async function listCdbFiles(repo) {
+  // 1순위: GitHub API (항상 최신). 막히면 직전에 받아둔 목록, 그다음 빌드가 남긴 목록.
+  const api = `https://api.github.com/repos/${repo.owner}/${repo.repo}/git/trees/${repo.branch}?recursive=1`;
+  try {
+    const res = await fetch(api, { cache: "no-cache" });
+    if (!res.ok) throw new Error("목록 조회 " + res.status);
+    const data = await res.json();
+    const files = (data.tree || [])
+      .filter(t => t.type === "blob" && /\.cdb$/i.test(t.path))
+      .map(t => t.path);
+    if (files.length) {
+      try { localStorage.setItem("orica_cdb_list", JSON.stringify(files)); } catch {}
+      return files;
+    }
+  } catch (err) {
+    buildWarnings.push("파일 목록을 받지 못했다: " + err.message);
+  }
+
+  try {
+    const cached = JSON.parse(localStorage.getItem("orica_cdb_list") || "[]");
+    if (cached.length) {
+      buildWarnings.push("직전에 받아둔 파일 목록을 썼다 — 새 cdb 는 빠질 수 있다");
+      return cached;
+    }
+  } catch {}
+
+  const fallback = await grabJson("data/cdbs.json", []);
+  if (fallback.length) {
+    buildWarnings.push("빌드가 남긴 파일 목록을 썼다 — 그 뒤에 추가된 cdb 는 빠질 수 있다");
+    return fallback;
+  }
+  return [];
 }
 
 async function loadAll() {
-  const report = await grabReport();
-  dataVersion = (report && report.built_at) || "";
-  showBuiltAt(report);
+  buildWarnings = [];
+  if (!CONFIG) CONFIG = await grabJson("config.json", null);
+  if (!CONFIG) throw new Error("config.json 을 읽지 못했다");
 
-  [icons, packs, allCards, constants] = await Promise.all([
-    grab("data/icons.json", {}),
-    grab("data/packs.json", []),
-    grab("data/cards.json", []),
-    grab("data/constants.json", { groups: [], drift: [], custom: [], source: null }),
+  const card = CONFIG.cardRepo, engine = CONFIG.engineRepo;
+
+  showProgress("설정을 읽는 중", 0.05);
+  const [extraTypes, packMeta, allocSrc, iconMap, webpList] = await Promise.all([
+    grabJson("types.extra.json", {}),
+    grabJson("packs.meta.json", {}),
+    grabJson("allocations.json", { ranges: [], setcodes: [] }),
+    grabJson("data/icons.json", {}),
+    grabJson("data/webp.json", null),
   ]);
-  allocations = await grab("data/allocations.json",
-    { ranges: [], setcodes: [], issues: [], rules: {} });
+  icons = iconMap || {};
+  webpSet = Array.isArray(webpList) ? new Set(webpList) : null;
+
+  showProgress("카드 파일 목록을 받는 중", 0.12);
+  const files = await listCdbFiles(card);
+  if (!files.length) throw new Error("cdb 파일을 찾지 못했다");
+
+  showProgress("SQLite 엔진을 준비하는 중", 0.2);
+  const SQL = await initSqlJs({ locateFile: f => CONFIG.sqlJs + f });
+
+  const rows = [];
+  for (let i = 0; i < files.length; i++) {
+    const name = files[i].split("/").pop();
+    showProgress(`${name} (${i + 1}/${files.length})`, 0.25 + 0.55 * (i / files.length));
+    const res = await fetch(RAW(card, files[i]), { cache: "no-cache" });
+    if (!res.ok) { buildWarnings.push(`${name} 을 받지 못했다 (${res.status})`); continue; }
+    const buf = new Uint8Array(await res.arrayBuffer());
+    let db;
+    try { db = new SQL.Database(buf); } catch { buildWarnings.push(`${name} 을 열지 못했다`); continue; }
+    try {
+      const out = db.exec(
+        "select t.id,t.name,t.desc,d.ot,d.alias,d.setcode,d.type,d.atk,d.def,d.level,d.race,d.attribute" +
+        " from texts t join datas d on d.id=t.id");
+      if (out.length) {
+        const cols = out[0].columns;
+        for (const v of out[0].values) {
+          const r = {};
+          cols.forEach((c, j) => { r[c] = v[j]; });
+          r.source = name;
+          rows.push(r);
+        }
+      }
+    } catch (e) {
+      buildWarnings.push(`${name} 을 읽지 못했다: ${e.message}`);
+    } finally { db.close(); }
+  }
+
+  showProgress("카드를 해석하는 중", 0.85);
+  const built = OricaDecode.buildAll(rows, { extraTypes, packMeta });
+  allCards = built.allCards;
+  packs = built.packs;
+  buildWarnings.push(...built.warnings);
+
   byId.clear();
   for (const c of allCards) byId.set(c.id, c);
   cache.clear();
+  for (const p of packs) cache.set(p.code, p);
+
+  // 이미지 경로: 빌드된 webp 가 있으면 그걸, 없으면 원본을 직접 쓴다
+  const pics = CONFIG.picsDir || "pics";
+  const pick = id => iconHasWebp(id) ? `img/${id}.webp` : RAW(card, `${pics}/${id}.jpg`);
+  for (const c of allCards) {
+    c.img = pick(c.id);
+    if (c.back) c.back.img = pick(c.back.id);
+    for (const a of c.arts || []) a.img = pick(a.id);
+  }
+
+  showProgress("할당표를 대조하는 중", 0.92);
+  allocations = OricaDecode.reconcile(allocSrc, rows, built.nameOf, built.usedIds);
+
+  showProgress("코드 일람을 읽는 중", 0.96);
+  const [header, lua] = await Promise.all([
+    grabText(RAW(engine, engine.header || "gframe/ocgapi_constants.h")),
+    grabText(RAW(card, CONFIG.luaConstants || "script/constant.lua")),
+  ]);
+  constants = OricaDecode.parseConstants(
+    header, lua, Object.keys(extraTypes).filter(k => !k.startsWith("_")));
+  if (!header) buildWarnings.push("엔진 헤더를 받지 못해 코드 일람이 비어 있다");
+
+  loadedAt = Date.now();
   topsub.textContent = `카드 ${allCards.length} · 팩 ${packs.length}`;
+  showBuiltAt();
   renderTabs();
 }
+
+/* 빌드가 만들어 둔 webp 목록. 없으면 전부 원본 이미지를 쓴다. */
+let webpSet = null;
+const iconHasWebp = id => webpSet !== null && webpSet.has(id);
 
 const TABS = [
   { id: "cards",     label: "전체 카드 목록", count: () => allCards.length },
@@ -451,14 +607,10 @@ function renderList() {
   view.append(ul);
 }
 
-async function renderPack(code) {
+function renderPack(code) {
   if (!packs.some(p => p.code === code)) { location.hash = "packs"; return; }
-  if (!cache.has(code)) {
-    const data = await grab(`data/pack-${code}.json`, null);
-    if (!data) { view.append(el("p", "empty", "팩 데이터를 불러오지 못했다.")); return; }
-    cache.set(code, data);
-  }
   const data = cache.get(code);
+  if (!data) { view.append(el("p", "empty", "팩 데이터를 찾지 못했다.")); return; }
   document.title = `${data.name} — CyanPro Card Database`;
   view.textContent = "";
 
@@ -980,19 +1132,109 @@ document.addEventListener("keydown", e => {
     openState.flipped = !openState.flipped; paintCard();
   }
 });
+/* ---------- 관리: 지금 다시 빌드 ---------- */
+const REPO = "pendulums58/OricaWeb";
+const WORKFLOW = "pages.yml";
+const TOKEN_KEY = "orica_admin_token";
+
+const readToken = () => {
+  try { return localStorage.getItem(TOKEN_KEY) || ""; } catch { return ""; }
+};
+const writeToken = v => {
+  try { v ? localStorage.setItem(TOKEN_KEY, v) : localStorage.removeItem(TOKEN_KEY); } catch {}
+};
+
+const adminHost = document.getElementById("adminHost");
+let adminOpen = false;
+
+document.getElementById("gearBtn").addEventListener("click", () => {
+  adminOpen = !adminOpen;
+  adminHost.hidden = !adminOpen;
+  if (adminOpen) renderAdmin();
+});
+
+function renderAdmin() {
+  adminHost.textContent = "";
+  const box = el("div", "adminpanel");
+  box.append(el("h3", null, "지금 다시 빌드"));
+  box.append(el("p", null,
+    "카드 리포에 push 한 내용은 다음 정기 빌드(매시 17분)까지 사이트에 반영되지 않는다. " +
+    "바로 반영하려면 여기서 빌드를 직접 돌린다. 토큰은 이 브라우저에만 저장되며 다른 사람에게 전달되지 않는다."));
+
+  const row = el("div", "adminrow");
+  const input = document.createElement("input");
+  input.type = "password";
+  input.placeholder = "GitHub 토큰 (Actions: write)";
+  input.value = readToken();
+  input.autocomplete = "off";
+
+  const save = el("button", "abtn", "저장");
+  const go = el("button", "abtn go", "지금 다시 빌드");
+  const clear = el("button", "abtn", "토큰 삭제");
+  row.append(input, save, go, clear);
+  box.append(row);
+
+  const status = el("div", "astatus");
+  box.append(status);
+
+  const say = (msg, cls) => { status.className = "astatus " + (cls || ""); status.textContent = msg; };
+
+  save.addEventListener("click", () => {
+    writeToken(input.value.trim());
+    say(input.value.trim() ? "저장했다." : "토큰을 비웠다.", "ok");
+  });
+  clear.addEventListener("click", () => {
+    writeToken(""); input.value = ""; say("토큰을 지웠다.", "ok");
+  });
+
+  go.addEventListener("click", async () => {
+    const token = input.value.trim() || readToken();
+    if (!token) { say("먼저 토큰을 넣어야 한다.", "err"); return; }
+    writeToken(token);
+    go.disabled = true;
+    say("빌드를 요청하는 중…");
+    try {
+      const res = await fetch(
+        `https://api.github.com/repos/${REPO}/actions/workflows/${WORKFLOW}/dispatches`,
+        { method: "POST",
+          headers: { "Accept": "application/vnd.github+json",
+                     "Authorization": `Bearer ${token}`,
+                     "X-GitHub-Api-Version": "2022-11-28" },
+          body: JSON.stringify({ ref: "main" }) });
+      if (res.status === 204) {
+        say("빌드를 시작했다. 1~2분 뒤 새로고침을 누르면 반영된다.", "ok");
+      } else if (res.status === 401 || res.status === 403) {
+        say("토큰이 거부됐다. Actions 쓰기 권한이 있는지 확인해라.", "err");
+      } else if (res.status === 404) {
+        say("워크플로를 찾지 못했다. 토큰 권한이나 리포 이름을 확인해라.", "err");
+      } else {
+        const body = await res.text();
+        say(`실패 (${res.status}) ${body.slice(0, 120)}`, "err");
+      }
+    } catch (e) {
+      say("요청을 보내지 못했다: " + e.message, "err");
+    }
+    go.disabled = false;
+  });
+
+  adminHost.append(box);
+}
+
 const refreshBtn = document.getElementById("refreshBtn");
 const refreshLabel = document.getElementById("refreshLabel");
 refreshBtn.addEventListener("click", async () => {
   refreshBtn.disabled = true;
   refreshBtn.classList.add("spin");
   refreshLabel.textContent = "받는 중";
-  const before = JSON.stringify([allCards.length, packs.length, allocations.ranges.length]);
+  const before = JSON.stringify([allCards.length, packs.length,
+                                 allCards.map(c => c.id)]);
   try {
     await loadAll();
     route();
-    const after = JSON.stringify([allCards.length, packs.length, allocations.ranges.length]);
+    const after = JSON.stringify([allCards.length, packs.length,
+                                  allCards.map(c => c.id)]);
     refreshLabel.textContent = before === after ? "변경 없음" : "갱신됨";
-  } catch {
+  } catch (e) {
     refreshLabel.textContent = "실패";
   }
   refreshBtn.classList.remove("spin");
@@ -1002,8 +1244,19 @@ refreshBtn.addEventListener("click", async () => {
   }, 1800);
 });
 
-loadAll().then(route).catch(err =>
-  view.append(el("p", "empty", "데이터를 불러오지 못했다: " + err.message)));
+setInterval(showBuiltAt, 60000);
+
+loadAll().then(route).catch(err => {
+  view.textContent = "";
+  const box = el("div", "loading");
+  box.append(el("div", null, "카드 데이터를 불러오지 못했다"));
+  box.append(el("div", "step", err.message));
+  const retry = el("button", "abtn", "다시 시도");
+  retry.style.marginTop = "14px";
+  retry.addEventListener("click", () => loadAll().then(route).catch(() => {}));
+  box.append(retry);
+  view.append(box);
+});
 </script>
 </body>
 </html>

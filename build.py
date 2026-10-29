@@ -1,699 +1,67 @@
 #!/usr/bin/env python3
-"""CyanPro_CardDB 팩 데이터 빌드.
+"""CyanPro Card Database — 이미지 빌드.
 
-리포 루트의 *.cdb 를 전부 읽어, 효과 설명 끝의 [CODE-AM001] 번호가 있는
-카드만 모아 팩 단위 JSON과 이미지를 web/dist 에 만든다.
+카드 해석은 브라우저가 template/decode.js 로 직접 한다. 이 스크립트는
+사이트 파일을 dist/ 에 모으고, 원본 이미지를 가벼운 webp 로 줄이는 일만 맡는다.
 
-표준 라이브러리만 사용한다. Pillow 가 있으면 이미지를 webp 로 줄이고,
-없으면 원본을 그대로 복사한다.
+webp 가 아직 없는 새 카드는 사이트가 원본 이미지를 직접 불러오므로,
+이 빌드가 늦어도 카드가 안 보이는 일은 없다.
 """
-import collections
-import datetime
 import json
 import os
-import re
 import shutil
-import sqlite3
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DIST = os.path.join(HERE, "dist")
 
+# 사이트를 이루는 파일들. 브라우저가 이것들을 그대로 읽는다.
+SITE_FILES = [
+    "config.json",
+    "types.extra.json",
+    "packs.meta.json",
+    "allocations.json",
+]
+
+ICON_SLOTS = [
+    "attr-earth", "attr-water", "attr-fire", "attr-wind",
+    "attr-light", "attr-dark", "attr-divine", "level", "rank", "link",
+]
+
+THUMB_WIDTH = 300
+
 
 def find_pack_dir():
-    """카드 리포(CyanPro_CardDB)의 위치를 찾는다.
-
-    ORICA_PACK_DIR 환경변수 > ./packs (CI 가 클론하는 자리) >
-    ../CyanPro_CardDB (리포를 나란히 두고 쓰는 로컬 작업) 순으로 본다.
-    """
+    """카드 리포(CyanPro_CardDB)의 위치를 찾는다."""
     env = os.environ.get("ORICA_PACK_DIR")
-    candidates = [env] if env else []
-    candidates.append(os.path.join(HERE, "packs"))
-    candidates.append(os.path.join(os.path.dirname(HERE), "CyanPro_CardDB"))
-    for path in candidates:
-        if path and os.path.isdir(path) and any(
-                f.lower().endswith(".cdb") for f in os.listdir(path)):
-            return os.path.abspath(path)
-    sys.exit(
-        "카드 리포를 찾지 못했다. CyanPro_CardDB 를 이 리포 옆에 두거나,\n"
-        "ORICA_PACK_DIR 환경변수로 경로를 지정해라.")
-
-
-def find_engine_dir():
-    """엔진 리포(CyanPro)의 위치를 찾는다. 없으면 None — 코드 일람만 비워진다.
-
-    ORICA_ENGINE_DIR > ./engine (CI 가 클론하는 자리) > ../CyanPro 순으로 본다.
-    """
-    env = os.environ.get("ORICA_ENGINE_DIR")
     for path in ([env] if env else []) + [
-            os.path.join(HERE, "engine"),
-            os.path.join(os.path.dirname(HERE), "CyanPro")]:
-        if path and os.path.isfile(
-                os.path.join(path, "gframe", "ocgapi_constants.h")):
+            os.path.join(HERE, "packs"),
+            os.path.join(os.path.dirname(HERE), "CyanPro_CardDB")]:
+        if path and os.path.isdir(path):
             return os.path.abspath(path)
     return None
-
-
-ROOT = find_pack_dir()
-ENGINE = find_engine_dir()
-PICS = os.path.join(ROOT, "pics")
-
-# ---------------------------------------------------------------- 상수
-
-NUMBER = re.compile(r"^\[([A-Z0-9]{3,6})-([A-Z]{2})(\d{3})\]$")
-LABELLED = re.compile(r"^\[\s*([^\[\]:：]+?)\s*[:：]\s*(.*?)\s*\]$")
-PLAIN = re.compile(r"^\[\s*([^\[\]]+?)\s*\]$")
-
-TYPE_BITS = [
-    (0x1, "몬스터", None), (0x2, "마법", "spell"), (0x4, "함정", "trap"),
-    (0x10, "일반", "normal"), (0x20, "효과", "effect"),
-    (0x40, "융합", "fusion"), (0x80, "의식", "ritual"),
-    (0x100, "함정 몬스터", None), (0x200, "스피릿", None),
-    (0x400, "유니온", None), (0x800, "듀얼", None), (0x1000, "튜너", None),
-    (0x2000, "싱크로", "synchro"), (0x4000, "토큰", None),
-    (0x10000, "속공", None), (0x20000, "지속", None), (0x40000, "장착", None),
-    (0x80000, "필드", None), (0x100000, "카운터", None),
-    (0x200000, "리버스", None), (0x400000, "툰", None),
-    (0x800000, "엑시즈", "xyz"), (0x1000000, "펜듈럼", None),
-    (0x2000000, "특수 소환", None), (0x4000000, "링크", "link"),
-]
-KNOWN_TYPE_MASK = 0
-for _b, _l, _f in TYPE_BITS:
-    KNOWN_TYPE_MASK |= _b
-
-# 테두리 색을 고를 때의 우선순위. 앞쪽이 이긴다.
-FRAME_ORDER = ["access", "pairing", "gift", "key", "hijack", "link", "xyz",
-               "synchro", "fusion", "ritual", "spell", "trap", "effect", "normal"]
-
-ATTRIBUTES = [(0x1, "땅"), (0x2, "물"), (0x4, "불"), (0x8, "바람"),
-              (0x10, "빛"), (0x20, "어둠"), (0x40, "신")]
-
-RACES = [
-    (0x1, "전사족"), (0x2, "마법사족"), (0x4, "천사족"), (0x8, "악마족"),
-    (0x10, "언데드족"), (0x20, "기계족"), (0x40, "물족"), (0x80, "화염족"),
-    (0x100, "암석족"), (0x200, "비행야수족"), (0x400, "식물족"), (0x800, "곤충족"),
-    (0x1000, "번개족"), (0x2000, "드래곤족"), (0x4000, "야수족"),
-    (0x8000, "야수전사족"), (0x10000, "공룡족"), (0x20000, "어류족"),
-    (0x40000, "해룡족"), (0x80000, "파충류족"), (0x100000, "사이킥족"),
-    (0x200000, "환신야수족"), (0x400000, "창조신족"), (0x800000, "환룡족"),
-    (0x1000000, "사이버스족"), (0x2000000, "환상마족"), (0x4000000, "사이보그족"),
-    (0x8000000, "마법기사족"), (0x10000000, "고룡족"), (0x20000000, "오메가사이킥족"),
-    (0x40000000, "천위족"), (0x80000000, "갤럭시족"),
-    (0x4000000000000000, "요괴족"),
-]
-
-LINK_MARKERS = [(0x1, "↙"), (0x2, "↓"), (0x4, "↘"), (0x8, "←"),
-                (0x20, "→"), (0x40, "↖"), (0x80, "↑"), (0x100, "↗")]
-
-
-def bits(value, table):
-    return [row[1] for row in table if value & row[0]]
-
-
-def one(value, table):
-    for bit, label in table:
-        if value & bit:
-            return label
-    return None
-
-
-# ---------------------------------------------------------------- 설명 파싱
-
-def split_desc(desc):
-    """효과 설명을 본문과 꼬리의 대괄호 메타 줄로 나눈다."""
-    text = (desc or "").replace("\r\n", "\n").replace("\r", "\n").rstrip()
-    lines = text.split("\n")
-    meta = []
-    while lines:
-        last = lines[-1].strip()
-        if last == "":
-            lines.pop()
-            continue
-        if last.startswith("[") and last.endswith("]"):
-            meta.insert(0, last)
-            lines.pop()
-            continue
-        break
-    return "\n".join(lines).strip(), meta
-
-
-def parse_meta(meta_lines):
-    """꼬리의 대괄호 줄들을 읽는다.
-
-    첫 줄은 제작자다 — [시안색새벽] 처럼 이름만 들어간다.
-    그 뒤로 [키 : 값] 은 라벨, 괄호만 있는 줄은 팩 이름, 마지막이 카드 번호.
-    라벨의 값이 여러 개면 | 로 나눈다.
-    """
-    out = {"number": None, "code": None, "seq": None, "region": None,
-           "pack_name": None, "credits": [], "labels": {}}
-
-    for index, line in enumerate(meta_lines):
-        m = NUMBER.match(line)
-        if m:
-            out["code"], out["region"], out["seq"] = m.group(1), m.group(2), int(m.group(3))
-            out["number"] = f"{m.group(1)}-{m.group(2)}{m.group(3)}"
-            continue
-
-        m = LABELLED.match(line)
-        if m:
-            key = re.sub(r"\s+", " ", m.group(1)).strip()
-            values = [v.strip() for v in m.group(2).split("|")]
-            values = [v for v in values if v]
-            out["labels"].setdefault(key, []).extend(values)
-            continue
-
-        m = PLAIN.match(line)
-        if m:
-            inner = m.group(1).strip()
-            if not inner:
-                continue
-            # 맨 첫 줄은 제작자 표기로 본다
-            if index == 0:
-                out["credits"].append(inner)
-            else:
-                out["pack_name"] = inner
-    return out
-
-
-# ---------------------------------------------------------------- 메인
-
-def load_json(path, default):
-    """손으로 고치는 설정 파일을 읽는다.
-
-    후행 쉼표와 // 주석은 JSON 표준이 아니지만 흔한 실수라 받아준다.
-    그래도 못 읽으면 어느 파일 몇 번째 줄인지 알려주고 멈춘다.
-    """
-    if not os.path.exists(path):
-        return default
-    raw = open(path, encoding="utf-8").read()
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        pass
-
-    cleaned = re.sub(r"(^|[^:])//[^\n]*", r"\1", raw)      # // 주석
-    cleaned = re.sub(r",(\s*[\]\}])", r"\1", cleaned)      # 후행 쉼표
-    try:
-        value = json.loads(cleaned)
-    except json.JSONDecodeError as err:
-        name = os.path.basename(path)
-        line = raw.split("\n")[err.lineno - 1] if err.lineno else ""
-        sys.exit(
-            f"\n{name} 을 읽지 못했다 — {err.lineno}번째 줄, {err.colno}번째 글자.\n"
-            f"  {line.strip()}\n"
-            f"  ({err.msg})\n\n"
-            "흔한 원인: 따옴표나 괄호가 짝이 안 맞거나, 값 사이 쉼표가 빠졌다.\n")
-    print(f"  알림: {os.path.basename(path)} 의 후행 쉼표/주석을 무시하고 읽었다")
-    return value
 
 
 def main():
-    extra_types = load_json(os.path.join(HERE, "types.extra.json"), {})
-    meta_file = os.path.join(HERE, "packs.meta.json")
-    pack_meta = load_json(meta_file, {})
-    aliases = pack_meta.get("_aliases", {})
-
-    custom_bits = {}
-    for key, spec in extra_types.items():
-        if key.startswith("_"):
-            continue
-        if isinstance(spec, str):
-            spec = {"name": spec}
-        name = str(spec.get("name") or "").strip()
-        if not name:
-            continue
-        custom_bits[int(key, 16)] = {"name": name, "frame": spec.get("frame")}
-
-    cdbs = sorted(f for f in os.listdir(ROOT) if f.lower().endswith(".cdb"))
-    warnings = []
-    unknown_bits = collections.Counter()
-    seen_ids = {}
-
-    TYPE_UNLOCKED = 0x8000
-    TYPE_KEY = 0x8
-
-    # --- 1패스: 모든 cdb 의 모든 행을 읽는다 (뒷면은 번호가 없을 수 있다) ---
-    records = []
-    for fname in cdbs:
-        path = os.path.join(ROOT, fname)
-        con = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
-        con.row_factory = sqlite3.Row
-        try:
-            rows = con.execute(
-                "select t.id, t.name, t.desc, d.ot, d.alias, d.setcode, d.type,"
-                " d.atk, d.def, d.level, d.race, d.attribute"
-                " from texts t join datas d on d.id = t.id").fetchall()
-        except sqlite3.Error as err:
-            warnings.append(f"{fname}: 읽기 실패 — {err}")
-            continue
-        finally:
-            con.close()
-        for row in rows:
-            if row["id"] in seen_ids:
-                warnings.append(
-                    f"ID {row['id']} 가 {seen_ids[row['id']]} 와 {fname} 양쪽에 있다")
-            else:
-                seen_ids[row["id"]] = fname
-            records.append((fname, row))
-
-    # 해방면(UNLOCKED)은 alias 로 앞면을 가리킨다
-    backs = {}
-    for fname, row in records:
-        if row["type"] & TYPE_UNLOCKED and row["alias"]:
-            backs[row["alias"]] = (fname, row)
-
-    def describe(fname, row, meta):
-        """한 행을 카드 dict 로 만든다."""
-        type_value = row["type"]
-        leftover = type_value & ~KNOWN_TYPE_MASK
-        labels = bits(type_value, TYPE_BITS)
-        frames = [r[2] for r in TYPE_BITS if type_value & r[0] and r[2]]
-        for bit, spec in custom_bits.items():
-            if leftover & bit:
-                labels.append(spec["name"])
-                if spec.get("frame"):
-                    frames.append(spec["frame"])
-                leftover &= ~bit
-        if leftover:
-            unknown_bits[hex(leftover)] += 1
-        frame = next((f for f in FRAME_ORDER if f in frames), "effect")
-
-        is_link = bool(type_value & 0x4000000)
-        is_monster = bool(type_value & 0x1)
-        level_value = row["level"] or 0
-
-        card = {
-            "id": row["id"],
-            "name": row["name"],
-            "text": meta["body"],
-            "types": labels,
-            "frame": frame,
-            "source": fname,
-        }
-        if meta.get("number"):
-            card["number"] = meta["number"]
-            card["seq"] = meta["seq"]
-        if meta["credits"]:
-            card["credits"] = meta["credits"]
-        if meta["labels"]:
-            card["labels"] = dict(meta["labels"])
-        if is_monster:
-            card["atk"] = row["atk"]
-            card["attribute"] = one(row["attribute"], ATTRIBUTES)
-            card["race"] = one(row["race"], RACES)
-            if is_link:
-                card["link"] = level_value & 0xFF
-                card["markers"] = bits(row["def"] or 0, LINK_MARKERS)
-            else:
-                card["def"] = row["def"]
-                card["level"] = level_value & 0xFF
-                lscale = (level_value >> 24) & 0xFF
-                rscale = (level_value >> 16) & 0xFF
-                if lscale or rscale:
-                    card["scale"] = [lscale, rscale]
-        return card
-
-    # --- 2패스: 번호가 있는 앞면만 팩에 넣는다 ---
-    packs = collections.defaultdict(list)
-    skipped = 0
-    for fname, row in records:
-        if row["type"] & TYPE_UNLOCKED:
-            continue  # 해방면은 앞면에 붙여서 내보낸다
-        body, meta_lines = split_desc(row["desc"])
-        meta = parse_meta(meta_lines)
-        meta["body"] = body
-        if not meta["number"]:
-            skipped += 1
-            continue
-
-        code = aliases.get(meta["code"], meta["code"])
-        if code != meta["code"]:
-            warnings.append(
-                f"{fname}: {row['name']} 의 번호 {meta['number']} 를 {code} 로 보정했다")
-
-        card = describe(fname, row, meta)
-        if meta["pack_name"]:
-            card["_packname"] = meta["pack_name"]
-        if row["alias"]:
-            card["alias"] = row["alias"]
-
-        back = backs.get(row["id"])
-        if back:
-            bfname, brow = back
-            bbody, bmeta_lines = split_desc(brow["desc"])
-            bmeta = parse_meta(bmeta_lines)
-            bmeta["body"] = bbody
-            card["back"] = describe(bfname, brow, bmeta)
-        elif row["type"] & TYPE_KEY:
-            warnings.append(f"{fname}: 키 카드 {row['name']} 의 해방면을 찾지 못했다")
-
-        packs[code].append(card)
-
-    # ---- 전체 카드 목록 ----
-    # 번호가 없어 팩에 못 들어간 카드까지 전부 싣는다.
-    all_cards = []
-    for fname, row in records:
-        if row["type"] & TYPE_UNLOCKED:
-            continue
-        body, meta_lines = split_desc(row["desc"])
-        meta = parse_meta(meta_lines)
-        meta["body"] = body
-        card = describe(fname, row, meta)
-        if row["alias"]:
-            card["alias"] = row["alias"]
-        back = backs.get(row["id"])
-        if back:
-            bfname, brow = back
-            bbody, bmeta_lines = split_desc(brow["desc"])
-            bmeta = parse_meta(bmeta_lines)
-            bmeta["body"] = bbody
-            card["back"] = describe(bfname, brow, bmeta)
-        all_cards.append(card)
-    all_cards.sort(key=lambda c: (c.get("number") or "zzz", c["id"]))
-
-    # ---- 다른 일러스트 ----
-    # alias 가 원본을 가리키고 번호 차이가 ART_SPAN 이내면 같은 카드의 다른 그림으로 본다.
-    # 키 카드의 해방면은 alias 를 다른 용도로 쓰므로 제외한다 (이미 back 으로 붙어 있다).
-    ART_SPAN = 10
-    art_family = collections.defaultdict(list)
-    for fname, row in records:
-        if row["type"] & TYPE_UNLOCKED:
-            continue
-        base = row["alias"] or row["id"]
-        if row["alias"] and abs(row["id"] - row["alias"]) > ART_SPAN:
-            base = row["id"]          # 너무 멀면 별개 카드로 둔다
-        art_family[base].append(row["id"])
-
-    arts_of = {}
-    for base, ids in art_family.items():
-        if len(ids) < 2:
-            continue
-        ordered = sorted(ids)
-        for i in ordered:
-            arts_of[i] = ordered
-
-    # ---- 할당 현황 ----
-    # allocations.json 에 적힌 예약 구간을, 실제 cdb 에 존재하는 ID 와 맞춰 본다.
-    alloc_src = load_json(os.path.join(HERE, "allocations.json"),
-                          {"ranges": [], "setcodes": []})
-    used_ids = sorted(seen_ids.keys())
-    id_source = dict(seen_ids)
-
-    # 카드 이름을 붙여 두면 시트에서 바로 확인할 수 있다
-    name_of = {}
-    for fname, row in records:
-        name_of[row["id"]] = row["name"]
-
-    alloc_ranges = []
-    for r in alloc_src.get("ranges", []):
-        lo, hi = int(r["from"]), int(r["to"])
-        inside = [i for i in used_ids if lo <= i <= hi]
-        entry = {
-            "from": lo,
-            "to": hi,
-            "size": hi - lo + 1,
-            "owner": r.get("owner") or "",
-            # 용도는 자유 텍스트. 카드군 코드와는 독립이다 —
-            # 한 구간에 여러 카드군이 섞일 수도, 한 카드군이 여러 구간에 걸칠 수도 있다.
-            "purpose": r.get("purpose") or r.get("archetype") or "",
-            "note": r.get("note") or "",
-            "status": r.get("status") or "active",
-            "used": len(inside),
-            "next_free": None,
-            "cards": [{"id": i, "name": name_of.get(i, ""),
-                       "source": id_source.get(i, "")} for i in inside],
-        }
-        taken = set(inside)
-        for i in range(lo, hi + 1):
-            if i not in taken:
-                entry["next_free"] = i
-                break
-        alloc_ranges.append(entry)
-    alloc_ranges.sort(key=lambda r: r["from"])
-
-    alloc_issues = []
-
-    # 구간끼리 겹치나
-    for a, b in zip(alloc_ranges, alloc_ranges[1:]):
-        if b["from"] <= a["to"]:
-            alloc_issues.append({
-                "kind": "overlap",
-                "detail": f"{a['from']}–{a['to']} ({a['owner'] or '미배정'}) 과 "
-                          f"{b['from']}–{b['to']} ({b['owner'] or '미배정'}) 이 겹친다"})
-
-    # 어느 구간에도 안 들어가는 ID 가 실제로 쓰이고 있나
-    def in_any(i):
-        return any(r["from"] <= i <= r["to"] for r in alloc_ranges)
-
-    orphans = [i for i in used_ids if not in_any(i)]
-    for i in orphans[:50]:
-        alloc_issues.append({
-            "kind": "orphan",
-            "detail": f"{i} ({name_of.get(i, '?')}) 가 예약 구간 밖에서 쓰이고 있다",
-            "id": i})
-    if len(orphans) > 50:
-        alloc_issues.append({
-            "kind": "orphan",
-            "detail": f"… 예약 구간 밖 ID 가 {len(orphans) - 50}개 더 있다"})
-
-    # setcode 중복 / 공식 대역 침범
-    seen_codes = {}
-    alloc_setcodes = []
-    for sc in alloc_src.get("setcodes", []):
-        raw = str(sc.get("code", "")).strip()
-        try:
-            val = int(raw, 0)
-        except ValueError:
-            alloc_issues.append({"kind": "setcode",
-                                 "detail": f"카드군 코드 '{raw}' 를 숫자로 읽을 수 없다"})
-            continue
-        base = val & 0xFFF
-        if base <= 0x208:
-            alloc_issues.append({
-                "kind": "setcode",
-                "detail": f"{raw} ({sc.get('name', '')}) 는 공식 카드군 대역(0x208 이하)이다"})
-        if base in seen_codes:
-            alloc_issues.append({
-                "kind": "setcode",
-                "detail": f"{raw} 가 '{seen_codes[base]}' 와 '{sc.get('name', '')}' 에 중복 할당됐다"})
-        else:
-            seen_codes[base] = sc.get("name", "")
-        alloc_setcodes.append({
-            "code": raw,
-            "value": val,
-            "name": sc.get("name") or "",
-            "owner": sc.get("owner") or "",
-            "note": sc.get("note") or "",
-        })
-    alloc_setcodes.sort(key=lambda x: x["value"])
-
-    # cdb 에 실제로 박힌 setcode 를 센다. 한 카드가 최대 4개를 16비트씩 담는다.
-    used_codes = collections.Counter()
-    code_cards = collections.defaultdict(list)
-    for fname, row in records:
-        packed = row["setcode"] or 0
-        for shift in (0, 16, 32, 48):
-            part = (packed >> shift) & 0xFFFF
-            if part:
-                used_codes[part] += 1
-                if len(code_cards[part]) < 40:
-                    code_cards[part].append(
-                        {"id": row["id"], "name": row["name"]})
-
-    for sc in alloc_setcodes:
-        sc["used"] = used_codes.get(sc["value"], 0)
-        sc["cards"] = code_cards.get(sc["value"], [])
-
-    declared = {sc["value"] for sc in alloc_setcodes}
-    for val, n in sorted(used_codes.items()):
-        if val not in declared:
-            sample = ", ".join(c["name"] for c in code_cards[val][:3])
-            alloc_issues.append({
-                "kind": "setcode",
-                "detail": f"0x{val:x} 가 카드 {n}장에 쓰이고 있는데 카드군 목록에 없다"
-                          + (f" ({sample})" if sample else "")})
-
-    allocations = {
-        "ranges": alloc_ranges,
-        "setcodes": alloc_setcodes,
-        "issues": alloc_issues,
-        "used_total": len(used_ids),
-        "rules": alloc_src.get("_규칙", {}),
-    }
-    if alloc_issues:
-        warnings.append(f"할당표 확인 필요 {len(alloc_issues)}건")
-
-    # 같은 그림 묶음을 카드에 붙인다
-    def attach_arts(card):
-        group = arts_of.get(card["id"])
-        if not group:
-            return
-        card["arts"] = [
-            {"id": i, "name": name_of.get(i, ""), "img": None}
-            for i in group]
-
-    for card in all_cards:
-        attach_arts(card)
-    for cards in packs.values():
-        for card in cards:
-            attach_arts(card)
-
-    # ---- 코드 일람 (엔진 헤더 기준) ----
-    constants = {"source": None, "groups": [], "drift": [], "custom": []}
-    if ENGINE:
-        header = os.path.join(ENGINE, "gframe", "ocgapi_constants.h")
-        define = re.compile(r"^#define\s+([A-Z][A-Z0-9_]*)\s+(.+?)\s*$")
-        comment = re.compile(r"//\s*(.*)$")
-        by_prefix = collections.OrderedDict()
-        with open(header, encoding="utf-8", errors="replace") as fh:
-            for line in fh:
-                m = define.match(line.rstrip())
-                if not m:
-                    continue
-                name, rest = m.group(1), m.group(2)
-                note = None
-                cm = comment.search(rest)
-                if cm:
-                    note = cm.group(1).strip()
-                    rest = rest[:cm.start()].strip()
-                rest = rest.strip()
-                if not rest:
-                    continue
-                prefix = name.split("_")[0]
-                entry = {"name": name, "value": rest}
-                if note:
-                    entry["note"] = note
-                by_prefix.setdefault(prefix, []).append(entry)
-        constants["source"] = "gframe/ocgapi_constants.h"
-        constants["groups"] = [{"prefix": k, "entries": v}
-                               for k, v in by_prefix.items()]
-
-        # types.extra.json 에 선언한 오리지널 비트에 해당하는 상수를 표시해 둔다
-        for e in by_prefix.get("TYPE", []):
-            try:
-                if int(e["value"], 0) in custom_bits:
-                    constants["custom"].append(e["name"])
-            except ValueError:
-                pass
-
-        # constant.lua 와 어긋나는 값을 찾아 경고한다
-        lua = os.path.join(ROOT, "script", "constant.lua")
-        if os.path.isfile(lua):
-            assign = re.compile(r"^([A-Z][A-Z0-9_]*)\s*=\s*(0x[0-9a-fA-F]+|\d+)")
-            lua_vals = {}
-            with open(lua, encoding="utf-8", errors="replace") as fh:
-                for line in fh:
-                    m = assign.match(line.strip())
-                    if m:
-                        lua_vals[m.group(1)] = int(m.group(2), 0)
-            engine_vals = {}
-            engine_by_value = {}
-            for group in constants["groups"]:
-                for e in group["entries"]:
-                    try:
-                        v = int(e["value"], 0)
-                    except ValueError:
-                        continue  # TYPE_EXTRA 처럼 다른 상수를 조합한 값
-                    engine_vals[e["name"]] = v
-                    engine_by_value.setdefault((group["prefix"], v), e["name"])
-
-            # (1) 같은 이름인데 값이 다르다 — 가장 확실한 어긋남
-            for name, lval in lua_vals.items():
-                ev = engine_vals.get(name)
-                if ev is not None and ev != lval:
-                    constants["drift"].append({
-                        "kind": "value",
-                        "name": name,
-                        "engine": hex(ev),
-                        "lua": hex(lval)})
-
-            # (2) 같은 값인데 이름이 다르다 — cdb 에 직접 쓰이는 계열만 본다.
-            #     LOCATION_REASON_* 처럼 하위 계열이 따로 있는 접두사는 오탐이 나므로 제외.
-            for prefix in ("TYPE", "RACE", "ATTRIBUTE"):
-                for name, lval in lua_vals.items():
-                    if not name.startswith(prefix + "_"):
-                        continue
-                    ename = engine_by_value.get((prefix, lval))
-                    if ename and ename != name and name not in engine_vals:
-                        constants["drift"].append({
-                            "kind": "name",
-                            "value": hex(lval),
-                            "engine": ename,
-                            "lua": name})
-            if constants["drift"]:
-                warnings.append(
-                    f"constant.lua 와 엔진 헤더가 어긋나는 상수 {len(constants['drift'])}개")
-    else:
-        warnings.append("엔진 리포를 찾지 못해 코드 일람이 비어 있다")
-
-    # ---- 이미지 ----
-    os.makedirs(os.path.join(DIST, "img"), exist_ok=True)
-    try:
-        from PIL import Image
-        have_pil = True
-    except ImportError:
-        have_pil = False
-        warnings.append("Pillow 가 없어 원본 이미지를 그대로 복사한다")
-
-    copied = 0
-    missing = []
-    targets = []
-    seen_targets = set()
-    for group in list(packs.values()) + [all_cards]:
-        for card in group:
-            for face in (card, card.get("back")):
-                if face and id(face) not in seen_targets:
-                    seen_targets.add(id(face))
-                    targets.append(face)
-    for card in targets:
-        if True:
-            src = None
-            for ext in (".jpg", ".png", ".jpeg", ".webp"):
-                candidate = os.path.join(PICS, f"{card['id']}{ext}")
-                if os.path.exists(candidate):
-                    src = candidate
-                    break
-            if not src:
-                missing.append(card.get("number") or str(card["id"]))
-                continue
-            if have_pil:
-                with Image.open(src) as im:
-                    im = im.convert("RGB")
-                    im.copy().resize(
-                        (300, round(im.height * 300 / im.width)),
-                        Image.LANCZOS).save(
-                        os.path.join(DIST, "img", f"{card['id']}.webp"),
-                        "WEBP", quality=82)
-                card["img"] = f"img/{card['id']}.webp"
-            else:
-                shutil.copy2(src, os.path.join(DIST, "img", os.path.basename(src)))
-                card["img"] = f"img/{os.path.basename(src)}"
-            copied += 1
-    if missing:
-        warnings.append(f"이미지 없는 카드 {len(missing)}장: {', '.join(missing[:10])}")
-
-    # arts 항목에 실제 이미지 경로를 채운다
-    img_of = {}
-    for card in targets:
-        if card.get("img"):
-            img_of[card["id"]] = card["img"]
-    for group in list(packs.values()) + [all_cards]:
-        for card in group:
-            for art in card.get("arts", []):
-                art["img"] = img_of.get(art["id"])
-
     os.makedirs(os.path.join(DIST, "data"), exist_ok=True)
+    os.makedirs(os.path.join(DIST, "img"), exist_ok=True)
+    warnings = []
+
+    # ---- 사이트 파일 ----
+    shutil.copy2(os.path.join(HERE, "template", "index.html"),
+                 os.path.join(DIST, "index.html"))
+    shutil.copy2(os.path.join(HERE, "template", "decode.js"),
+                 os.path.join(DIST, "decode.js"))
+    for name in SITE_FILES:
+        src = os.path.join(HERE, name)
+        if os.path.exists(src):
+            shutil.copy2(src, os.path.join(DIST, name))
+        else:
+            warnings.append(f"{name} 이 없다")
 
     # ---- 선택 아이콘 ----
-    # icons/ 폴더에 파일을 넣으면 사이트가 그걸 쓰고, 없으면 내장 SVG 로 그린다.
-    # 파일명은 아래 ICON_SLOTS 의 키. 확장자는 png / webp / svg / jpg 아무거나.
-    ICON_SLOTS = [
-        "attr-earth", "attr-water", "attr-fire", "attr-wind",
-        "attr-light", "attr-dark", "attr-divine",
-        "level", "rank", "link",
-    ]
-    icon_src = os.path.join(HERE, "icons")
     icons = {}
+    icon_src = os.path.join(HERE, "icons")
     if os.path.isdir(icon_src):
         out_dir = os.path.join(DIST, "icons")
         os.makedirs(out_dir, exist_ok=True)
@@ -704,78 +72,67 @@ def main():
                     shutil.copy2(cand, os.path.join(out_dir, slot + ext))
                     icons[slot] = f"icons/{slot}{ext}"
                     break
-        found = len(icons)
-        if found:
-            warnings.append(
-                f"icons/ 에서 {found}개를 찾아 적용했다"
-                + (f" (나머지 {len(ICON_SLOTS) - found}개는 내장 아이콘을 쓴다)"
-                   if found < len(ICON_SLOTS) else ""))
-
     with open(os.path.join(DIST, "data", "icons.json"), "w", encoding="utf-8") as fh:
         json.dump(icons, fh, ensure_ascii=False, indent=1)
 
-    # ---- 팩 목록 ----
-    os.makedirs(os.path.join(DIST, "data"), exist_ok=True)
-    index = []
-    for code, cards in packs.items():
-        cards.sort(key=lambda c: c["seq"])
-        info = pack_meta.get(code, {})
-        names = collections.Counter(
-            c.pop("_packname") for c in cards if c.get("_packname"))
-        name = info.get("name") or (names.most_common(1)[0][0] if names else code)
-        released = info.get("released")
-        if not released:
-            warnings.append(f"{code}: 발매일이 packs.meta.json 에 없다")
-        entry = {
-            "code": code,
-            "name": name,
-            "released": released,
-            "count": len(cards),
-            "covers": [c["img"] for c in cards[:3] if c.get("img")],
-        }
-        index.append(entry)
-        with open(os.path.join(DIST, "data", f"pack-{code}.json"), "w",
-                  encoding="utf-8") as fh:
-            json.dump({**entry, "cards": cards}, fh, ensure_ascii=False, indent=1)
+    # ---- cdb 목록 (GitHub API 가 막혔을 때의 대비책) ----
+    root = find_pack_dir()
+    cdbs = []
+    if root:
+        for dirpath, _dirs, names in os.walk(root):
+            if ".git" in dirpath.split(os.sep):
+                continue
+            for n in names:
+                if n.lower().endswith(".cdb"):
+                    rel = os.path.relpath(os.path.join(dirpath, n), root)
+                    cdbs.append(rel.replace(os.sep, "/"))
+    cdbs.sort()
+    with open(os.path.join(DIST, "data", "cdbs.json"), "w", encoding="utf-8") as fh:
+        json.dump(cdbs, fh, ensure_ascii=False, indent=1)
 
-    index.sort(key=lambda p: (p["released"] or "9999", p["code"]))
-    with open(os.path.join(DIST, "data", "packs.json"), "w", encoding="utf-8") as fh:
-        json.dump(index, fh, ensure_ascii=False, indent=1)
+    # ---- 이미지 ----
+    made = []
+    if not root:
+        warnings.append("카드 리포를 찾지 못해 이미지를 만들지 않았다")
+    else:
+        pics = os.path.join(root, "pics")
+        if not os.path.isdir(pics):
+            warnings.append("pics 폴더가 없다")
+        else:
+            try:
+                from PIL import Image
+            except ImportError:
+                Image = None
+                warnings.append("Pillow 가 없어 이미지를 만들지 않았다")
 
-    with open(os.path.join(DIST, "data", "cards.json"), "w", encoding="utf-8") as fh:
-        json.dump(all_cards, fh, ensure_ascii=False, indent=1)
-    with open(os.path.join(DIST, "data", "constants.json"), "w", encoding="utf-8") as fh:
-        json.dump(constants, fh, ensure_ascii=False, indent=1)
-    with open(os.path.join(DIST, "data", "allocations.json"), "w", encoding="utf-8") as fh:
-        json.dump(allocations, fh, ensure_ascii=False, indent=1)
+            if Image is not None:
+                for name in sorted(os.listdir(pics)):
+                    stem, ext = os.path.splitext(name)
+                    if ext.lower() not in (".jpg", ".jpeg", ".png", ".webp"):
+                        continue
+                    if not stem.isdigit():
+                        continue
+                    out = os.path.join(DIST, "img", f"{stem}.webp")
+                    try:
+                        with Image.open(os.path.join(pics, name)) as im:
+                            im = im.convert("RGB")
+                            height = round(im.height * THUMB_WIDTH / im.width)
+                            im.resize((THUMB_WIDTH, height),
+                                      Image.LANCZOS).save(out, "WEBP", quality=82)
+                        made.append(int(stem))
+                    except Exception as err:
+                        warnings.append(f"{name} 변환 실패: {err}")
 
-    shutil.copy2(os.path.join(HERE, "template", "index.html"),
-                 os.path.join(DIST, "index.html"))
+    made.sort()
+    with open(os.path.join(DIST, "data", "webp.json"), "w", encoding="utf-8") as fh:
+        json.dump(made, fh)
 
-    # ---- 보고 ----
-    if unknown_bits:
-        warnings.append("정의되지 않은 타입 비트: " + ", ".join(
-            f"{b} ({n}장)" for b, n in unknown_bits.most_common()))
-    report = {
-        "built_at": datetime.datetime.now(datetime.timezone.utc)
-                     .replace(microsecond=0).isoformat(),
-        "packs": len(index),
-        "cards": sum(p["count"] for p in index),
-        "images": copied,
-        "custom_icons": len(icons),
-        "all_cards": len(all_cards),
-        "constants": sum(len(g["entries"]) for g in constants["groups"]),
-        "drift": len(constants["drift"]),
-        "alloc_ranges": len(alloc_ranges),
-        "alloc_issues": len(alloc_issues),
-        "skipped_no_number": skipped,
-        "warnings": warnings,
-    }
+    report = {"images": len(made), "icons": len(icons),
+              "cdbs": len(cdbs), "warnings": warnings}
     with open(os.path.join(DIST, "report.json"), "w", encoding="utf-8") as fh:
         json.dump(report, fh, ensure_ascii=False, indent=1)
 
-    print(f"팩 {report['packs']}개 · 카드 {report['cards']}장 · 이미지 {copied}장")
-    print(f"번호 없어 제외한 카드 {skipped}장")
+    print(f"이미지 {len(made)}장 · 아이콘 {len(icons)}개 · cdb 목록 {len(cdbs)}개")
     for w in warnings:
         print("  경고:", w)
     return 0

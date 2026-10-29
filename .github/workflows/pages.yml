@@ -4,9 +4,9 @@ on:
   push:
     branches: [main]
   schedule:
-    # 카드 리포에 새 카드가 들어와도 이 리포는 가만히 있으므로,
-    # 6시간마다 다시 빌드해서 반영한다.
-    - cron: "17 */6 * * *"
+    # 카드 데이터는 브라우저가 직접 읽으므로 빌드를 기다리지 않는다.
+    # 이 주기 빌드는 이미지 webp 를 따라잡기 위한 것뿐이다.
+    - cron: "17 */3 * * *"
   workflow_dispatch:
 
 permissions:
@@ -24,14 +24,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Fetch card repo
+      - name: Fetch card repo (이미지용)
         run: git clone --depth 1 https://github.com/pendulums58/CyanPro_CardDB.git packs
-
-      - name: Fetch engine repo (코드 일람용)
-        run: |
-          git clone --depth 1 --filter=blob:none --sparse \
-            https://github.com/pendulums58/CyanPro.git engine
-          git -C engine sparse-checkout set gframe
 
       - uses: actions/setup-python@v5
         with:
