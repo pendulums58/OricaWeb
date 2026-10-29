@@ -38,7 +38,23 @@ def find_pack_dir():
         "ORICA_PACK_DIR 환경변수로 경로를 지정해라.")
 
 
+def find_engine_dir():
+    """엔진 리포(CyanPro)의 위치를 찾는다. 없으면 None — 코드 일람만 비워진다.
+
+    ORICA_ENGINE_DIR > ./engine (CI 가 클론하는 자리) > ../CyanPro 순으로 본다.
+    """
+    env = os.environ.get("ORICA_ENGINE_DIR")
+    for path in ([env] if env else []) + [
+            os.path.join(HERE, "engine"),
+            os.path.join(os.path.dirname(HERE), "CyanPro")]:
+        if path and os.path.isfile(
+                os.path.join(path, "gframe", "ocgapi_constants.h")):
+            return os.path.abspath(path)
+    return None
+
+
 ROOT = find_pack_dir()
+ENGINE = find_engine_dir()
 PICS = os.path.join(ROOT, "pics")
 
 # ---------------------------------------------------------------- 상수
@@ -73,8 +89,8 @@ ATTRIBUTES = [(0x1, "땅"), (0x2, "물"), (0x4, "불"), (0x8, "바람"),
 
 RACES = [
     (0x1, "전사족"), (0x2, "마법사족"), (0x4, "천사족"), (0x8, "악마족"),
-    (0x10, "언데드족"), (0x20, "기계족"), (0x40, "물족"), (0x80, "염족"),
-    (0x100, "암석족"), (0x200, "조인족"), (0x400, "식물족"), (0x800, "곤충족"),
+    (0x10, "언데드족"), (0x20, "기계족"), (0x40, "물족"), (0x80, "화염족"),
+    (0x100, "암석족"), (0x200, "비행야수족"), (0x400, "식물족"), (0x800, "곤충족"),
     (0x1000, "번개족"), (0x2000, "드래곤족"), (0x4000, "야수족"),
     (0x8000, "야수전사족"), (0x10000, "공룡족"), (0x20000, "어류족"),
     (0x40000, "해룡족"), (0x80000, "파충류족"), (0x100000, "사이킥족"),
@@ -296,6 +312,116 @@ def main():
 
         packs[code].append(card)
 
+    # ---- 전체 카드 목록 ----
+    # 번호가 없어 팩에 못 들어간 카드까지 전부 싣는다.
+    all_cards = []
+    for fname, row in records:
+        if row["type"] & TYPE_UNLOCKED:
+            continue
+        body, meta_lines = split_desc(row["desc"])
+        meta = parse_meta(meta_lines)
+        meta["body"] = body
+        card = describe(fname, row, meta)
+        if row["alias"]:
+            card["alias"] = row["alias"]
+        back = backs.get(row["id"])
+        if back:
+            bfname, brow = back
+            bbody, bmeta_lines = split_desc(brow["desc"])
+            bmeta = parse_meta(bmeta_lines)
+            bmeta["body"] = bbody
+            card["back"] = describe(bfname, brow, bmeta)
+        all_cards.append(card)
+    all_cards.sort(key=lambda c: (c.get("number") or "zzz", c["id"]))
+
+    # ---- 코드 일람 (엔진 헤더 기준) ----
+    constants = {"source": None, "groups": [], "drift": [], "custom": []}
+    if ENGINE:
+        header = os.path.join(ENGINE, "gframe", "ocgapi_constants.h")
+        define = re.compile(r"^#define\s+([A-Z][A-Z0-9_]*)\s+(.+?)\s*$")
+        comment = re.compile(r"//\s*(.*)$")
+        by_prefix = collections.OrderedDict()
+        with open(header, encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                m = define.match(line.rstrip())
+                if not m:
+                    continue
+                name, rest = m.group(1), m.group(2)
+                note = None
+                cm = comment.search(rest)
+                if cm:
+                    note = cm.group(1).strip()
+                    rest = rest[:cm.start()].strip()
+                rest = rest.strip()
+                if not rest:
+                    continue
+                prefix = name.split("_")[0]
+                entry = {"name": name, "value": rest}
+                if note:
+                    entry["note"] = note
+                by_prefix.setdefault(prefix, []).append(entry)
+        constants["source"] = "gframe/ocgapi_constants.h"
+        constants["groups"] = [{"prefix": k, "entries": v}
+                               for k, v in by_prefix.items()]
+
+        # types.extra.json 에 선언한 오리지널 비트에 해당하는 상수를 표시해 둔다
+        for e in by_prefix.get("TYPE", []):
+            try:
+                if int(e["value"], 0) in custom_bits:
+                    constants["custom"].append(e["name"])
+            except ValueError:
+                pass
+
+        # constant.lua 와 어긋나는 값을 찾아 경고한다
+        lua = os.path.join(ROOT, "script", "constant.lua")
+        if os.path.isfile(lua):
+            assign = re.compile(r"^([A-Z][A-Z0-9_]*)\s*=\s*(0x[0-9a-fA-F]+|\d+)")
+            lua_vals = {}
+            with open(lua, encoding="utf-8", errors="replace") as fh:
+                for line in fh:
+                    m = assign.match(line.strip())
+                    if m:
+                        lua_vals[m.group(1)] = int(m.group(2), 0)
+            engine_vals = {}
+            engine_by_value = {}
+            for group in constants["groups"]:
+                for e in group["entries"]:
+                    try:
+                        v = int(e["value"], 0)
+                    except ValueError:
+                        continue  # TYPE_EXTRA 처럼 다른 상수를 조합한 값
+                    engine_vals[e["name"]] = v
+                    engine_by_value.setdefault((group["prefix"], v), e["name"])
+
+            # (1) 같은 이름인데 값이 다르다 — 가장 확실한 어긋남
+            for name, lval in lua_vals.items():
+                ev = engine_vals.get(name)
+                if ev is not None and ev != lval:
+                    constants["drift"].append({
+                        "kind": "value",
+                        "name": name,
+                        "engine": hex(ev),
+                        "lua": hex(lval)})
+
+            # (2) 같은 값인데 이름이 다르다 — cdb 에 직접 쓰이는 계열만 본다.
+            #     LOCATION_REASON_* 처럼 하위 계열이 따로 있는 접두사는 오탐이 나므로 제외.
+            for prefix in ("TYPE", "RACE", "ATTRIBUTE"):
+                for name, lval in lua_vals.items():
+                    if not name.startswith(prefix + "_"):
+                        continue
+                    ename = engine_by_value.get((prefix, lval))
+                    if ename and ename != name and name not in engine_vals:
+                        constants["drift"].append({
+                            "kind": "name",
+                            "value": hex(lval),
+                            "engine": ename,
+                            "lua": name})
+            if constants["drift"]:
+                warnings.append(
+                    f"constant.lua 와 엔진 헤더가 어긋나는 상수 {len(constants['drift'])}개")
+    else:
+        warnings.append("엔진 리포를 찾지 못해 코드 일람이 비어 있다")
+
     # ---- 이미지 ----
     os.makedirs(os.path.join(DIST, "img"), exist_ok=True)
     try:
@@ -308,11 +434,13 @@ def main():
     copied = 0
     missing = []
     targets = []
-    for cards in packs.values():
-        for card in cards:
-            targets.append(card)
-            if card.get("back"):
-                targets.append(card["back"])
+    seen_targets = set()
+    for group in list(packs.values()) + [all_cards]:
+        for card in group:
+            for face in (card, card.get("back")):
+                if face and id(face) not in seen_targets:
+                    seen_targets.add(id(face))
+                    targets.append(face)
     for card in targets:
         if True:
             src = None
@@ -400,6 +528,11 @@ def main():
     with open(os.path.join(DIST, "data", "packs.json"), "w", encoding="utf-8") as fh:
         json.dump(index, fh, ensure_ascii=False, indent=1)
 
+    with open(os.path.join(DIST, "data", "cards.json"), "w", encoding="utf-8") as fh:
+        json.dump(all_cards, fh, ensure_ascii=False, indent=1)
+    with open(os.path.join(DIST, "data", "constants.json"), "w", encoding="utf-8") as fh:
+        json.dump(constants, fh, ensure_ascii=False, indent=1)
+
     shutil.copy2(os.path.join(HERE, "template", "index.html"),
                  os.path.join(DIST, "index.html"))
 
@@ -412,6 +545,9 @@ def main():
         "cards": sum(p["count"] for p in index),
         "images": copied,
         "custom_icons": len(icons),
+        "all_cards": len(all_cards),
+        "constants": sum(len(g["entries"]) for g in constants["groups"]),
+        "drift": len(constants["drift"]),
         "skipped_no_number": skipped,
         "warnings": warnings,
     }

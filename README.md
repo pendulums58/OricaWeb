@@ -13,6 +13,15 @@
 | `types.extra.json` | CyanCore 오리지널 타입 비트 → 표시 이름 |
 | `packs.meta.json` | 팩 표시 이름·발매일, 팩 코드 오타 보정 |
 | `template/index.html` | 사이트 본체 |
+| `icons/` | 속성·레벨 아이콘을 넣어두면 내장 SVG 대신 쓴다 (선택) |
+
+## 화면
+
+| 탭 | 내용 |
+| --- | --- |
+| 전체 카드 목록 | 카드 리포의 모든 카드. 팩에 수록되지 않은 카드도 나온다 |
+| 팩 목록 | 번호로 묶인 팩들 |
+| 코드 일람 | CyanCore 엔진 헤더에서 뽑은 상수표. `constant.lua` 와 어긋나는 값은 따로 경고한다 |
 
 ## 팩의 기준
 
@@ -32,6 +41,13 @@ cd dist && python -m http.server 8000
 
 ```
 ORICA_PACK_DIR=/path/to/CyanPro_CardDB python build.py
+```
+
+코드 일람은 엔진 리포(CyanPro)의 `gframe/ocgapi_constants.h` 를 읽는다.
+`../CyanPro` 에 있으면 자동으로 찾고, 없으면 코드 일람 탭만 비어 있다.
+
+```
+ORICA_ENGINE_DIR=/path/to/CyanPro python build.py
 ```
 
 ## 배포

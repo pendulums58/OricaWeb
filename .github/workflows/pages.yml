@@ -27,6 +27,12 @@ jobs:
       - name: Fetch card repo
         run: git clone --depth 1 https://github.com/pendulums58/CyanPro_CardDB.git packs
 
+      - name: Fetch engine repo (코드 일람용)
+        run: |
+          git clone --depth 1 --filter=blob:none --sparse \
+            https://github.com/pendulums58/CyanPro.git engine
+          git -C engine sparse-checkout set gframe
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"

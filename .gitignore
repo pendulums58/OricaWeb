@@ -4,3 +4,4 @@ packs/
 # 아이콘 파일은 각자 넣는다 (README 는 추적)
 icons/*
 !icons/README.md
+engine/

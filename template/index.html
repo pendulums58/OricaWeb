@@ -47,7 +47,15 @@ button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
 .mono{font-family:var(--font-mono);font-variant-numeric:tabular-nums}
 
 header.top{border-bottom:1px solid var(--line);background:var(--surface);position:sticky;top:0;z-index:5}
-header.top .wrap{display:flex;align-items:center;gap:12px;padding-block:13px;flex-wrap:wrap}
+header.top .brandrow{display:flex;align-items:center;gap:12px;padding-block:13px 9px;flex-wrap:wrap}
+.tabs{display:flex;gap:2px;overflow-x:auto;scrollbar-width:none}
+.tabs::-webkit-scrollbar{display:none}
+.tab{position:relative;font-size:13px;font-weight:500;color:var(--fg-dim);padding:8px 13px 10px;
+  white-space:nowrap;border-bottom:2px solid transparent;text-decoration:none}
+.tab:hover{color:var(--fg)}
+.tab[aria-current="page"]{color:var(--accent);border-bottom-color:var(--accent);font-weight:600}
+.tab .n{font-family:var(--font-mono);font-size:10.5px;color:var(--fg-faint);margin-left:5px}
+.tab[aria-current="page"] .n{color:var(--accent)}
 h1{margin:0;font-size:16.5px;font-weight:700;letter-spacing:-.015em}
 h1 a{text-decoration:none}
 h1 em{font-style:normal;color:var(--accent)}
@@ -141,6 +149,38 @@ dialog::backdrop{background:rgba(4,10,14,.62)}
 .tag.grey{background:var(--surface-2);color:var(--fg-dim)}
 .creditrow{display:flex;gap:6px;flex-wrap:wrap;margin:12px 0 13px;padding-top:11px;border-top:1px solid var(--line-soft)}
 .note{font-family:var(--font-mono);font-size:10.5px;color:var(--fg-faint)}
+.pagehead{margin-bottom:18px}
+.pagehead h2{margin:0 0 5px;font-size:21px;font-weight:700;letter-spacing:-.02em}
+.pagehead p{margin:0;font-size:12.5px;color:var(--fg-dim)}
+.chiprow{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:16px}
+.fchip{font-size:11.5px;padding:4px 11px;border-radius:999px;border:1px solid var(--line);
+  background:var(--surface);color:var(--fg-dim)}
+.fchip[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+.fchip .dot{display:inline-block;width:7px;height:7px;border-radius:2px;background:var(--sw);margin-right:6px;vertical-align:1px}
+.nopack{opacity:.72}
+.nopack .no{color:var(--fg-faint);font-style:italic}
+
+.warnbox{border:1px solid var(--warnline,#d98f2a);background:color-mix(in srgb,#d98f2a 10%,transparent);
+  border-radius:11px;padding:13px 15px;margin-bottom:20px}
+.warnbox h3{margin:0 0 7px;font-size:13px;font-weight:700}
+.warnbox p{margin:0 0 9px;font-size:12.3px;line-height:1.6;color:var(--fg-dim)}
+.drifttable{width:100%;border-collapse:collapse;font-family:var(--font-mono);font-size:11.5px}
+.drifttable th{text-align:left;font-weight:500;color:var(--fg-faint);padding:4px 10px 4px 0;font-size:10.5px;letter-spacing:.05em}
+.drifttable td{padding:3px 10px 3px 0;border-top:1px solid var(--line-soft)}
+.drifttable .bad{color:var(--f-trap)}
+.drifttable .good{color:var(--accent)}
+
+.constgroup{margin-bottom:22px}
+.constgroup h3{margin:0 0 8px;font-size:12px;font-weight:600;letter-spacing:.07em;color:var(--accent)}
+.consttable{width:100%;border-collapse:collapse;font-size:12px}
+.consttable th{text-align:left;font-size:10.5px;letter-spacing:.05em;color:var(--fg-faint);
+  font-weight:500;padding:5px 12px 5px 0;border-bottom:1px solid var(--line)}
+.consttable td{padding:5px 12px 5px 0;border-bottom:1px solid var(--line-soft);vertical-align:top}
+.consttable td.nm{font-family:var(--font-mono);font-weight:500;white-space:nowrap}
+.consttable td.vl{font-family:var(--font-mono);color:var(--accent);white-space:nowrap}
+.consttable td.nt{color:var(--fg-dim);font-size:11.5px}
+.consttable tr.custom td.nm{color:var(--f-access)}
+.constwrap{overflow-x:auto}
 .empty{padding:40px 10px;text-align:center;color:var(--fg-faint);font-size:13px;grid-column:1/-1}
 footer{border-top:1px solid var(--line-soft);margin-top:46px}
 footer .wrap{padding-block:20px 36px;font-size:11.5px;color:var(--fg-faint);line-height:1.7}
@@ -160,10 +200,13 @@ footer .wrap{padding-block:20px 36px;font-size:11.5px;color:var(--fg-faint);line
   <symbol id="g-star" viewBox="0 0 24 24"><path d="m12 1.8 3.1 6.8 7.4.8-5.5 5 1.5 7.3L12 18l-6.5 3.7 1.5-7.3-5.5-5 7.4-.8z"/></symbol>
 </defs></svg>
 
-<header class="top"><div class="wrap">
-  <h1><a href="#">Cyan<em>Pro</em> Card Database</a></h1>
-  <span class="sub" id="topsub"></span>
-</div></header>
+<header class="top">
+  <div class="wrap brandrow">
+    <h1><a href="#cards">Cyan<em>Pro</em> Card Database</a></h1>
+    <span class="sub" id="topsub"></span>
+  </div>
+  <nav class="wrap tabs" id="tabs" aria-label="주요 화면"></nav>
+</header>
 
 <main class="wrap" id="view"></main>
 
@@ -189,9 +232,12 @@ const modal = document.getElementById("cardModal");
 const modalBody = document.getElementById("modalBody");
 const mtop = document.getElementById("mtop");
 let packs = [];
+let allCards = [];
+let constants = { groups: [], drift: [], custom: [], source: null };
 let openState = null;
 let icons = {};
 const cache = new Map();
+const byId = new Map();
 
 const el = (t, c, x) => { const n = document.createElement(t); if (c) n.className = c; if (x != null) n.textContent = x; return n; };
 const svgUse = id => {
@@ -241,17 +287,58 @@ function linkGrid(markers) {
   return g;
 }
 
-async function loadPacks() {
-  try {
-    icons = await (await fetch("data/icons.json")).json();
-  } catch { icons = {}; }
-  packs = await (await fetch("data/packs.json")).json();
-  topsub.textContent = `팩 ${packs.length} · 카드 ${packs.reduce((a, p) => a + p.count, 0)}`;
+const grab = async (path, fallback) => {
+  try { return await (await fetch(path)).json(); } catch { return fallback; }
+};
+
+async function loadAll() {
+  [icons, packs, allCards, constants] = await Promise.all([
+    grab("data/icons.json", {}),
+    grab("data/packs.json", []),
+    grab("data/cards.json", []),
+    grab("data/constants.json", { groups: [], drift: [], custom: [], source: null }),
+  ]);
+  for (const c of allCards) byId.set(c.id, c);
+  topsub.textContent = `카드 ${allCards.length} · 팩 ${packs.length}`;
+  renderTabs();
+}
+
+const TABS = [
+  { id: "cards",     label: "전체 카드 목록", count: () => allCards.length },
+  { id: "packs",     label: "팩 목록",        count: () => packs.length },
+  { id: "constants", label: "코드 일람",
+    count: () => constants.groups.reduce((a, g) => a + g.entries.length, 0) },
+];
+
+function renderTabs() {
+  const host = document.getElementById("tabs");
+  host.textContent = "";
+  const active = currentTab();
+  for (const t of TABS) {
+    const a = el("a", "tab");
+    a.href = "#" + t.id;
+    a.append(document.createTextNode(t.label));
+    const n = t.count();
+    if (n) a.append(el("span", "n", String(n)));
+    if (t.id === active) a.setAttribute("aria-current", "page");
+    host.append(a);
+  }
+}
+
+function currentTab() {
+  const h = decodeURIComponent(location.hash.replace(/^#/, ""));
+  if (!h) return "cards";
+  if (h === "packs" || h === "constants" || h === "cards") return h;
+  return "packs";   // #RS01 같은 팩 코드
 }
 
 function renderList() {
-  document.title = "CyanPro Card Database";
+  document.title = "팩 목록 — CyanPro Card Database";
   view.textContent = "";
+  const head = el("div", "pagehead");
+  head.append(el("h2", null, "팩 목록"));
+  head.append(el("p", null, `발매순 ${packs.length}개 팩`));
+  view.append(head);
   const ul = el("ul", "packgrid");
   for (const p of packs) {
     const b = el("button", "packcard");
@@ -271,14 +358,14 @@ function renderList() {
 }
 
 async function renderPack(code) {
-  if (!packs.some(p => p.code === code)) { location.hash = ""; return; }
+  if (!packs.some(p => p.code === code)) { location.hash = "packs"; return; }
   if (!cache.has(code)) cache.set(code, await (await fetch(`data/pack-${code}.json`)).json());
   const data = cache.get(code);
   document.title = `${data.name} — CyanPro Card Database`;
   view.textContent = "";
 
   const row = el("div", "backrow");
-  const back = el("a", "back", "← 팩 목록"); back.href = "#";
+  const back = el("a", "back", "← 팩 목록"); back.href = "#packs";
   row.append(back);
 
   const head = el("div", "packhead");
@@ -320,7 +407,8 @@ function cardCell(c) {
   b.append(pic);
 
   const cap = el("div", "cap");
-  cap.append(el("span", "no", c.number), el("span", "nm", c.name));
+  if (!c.number) b.classList.add("nopack");
+  cap.append(el("span", "no", c.number || "미수록"), el("span", "nm", c.name));
   const ft = el("div", "ft");
   ft.append(el("span", "pip"));
   let tail = c.types.find(t => SUMMON_TYPES.includes(t))
@@ -362,7 +450,7 @@ function paintCard() {
     art.append(im); head.append(art);
   }
   const info = el("div", "dinfo");
-  info.append(el("div", "dnum", card.number), el("h3", null, face.name));
+  info.append(el("div", "dnum", card.number || "팩 미수록"), el("h3", null, face.name));
 
   if (card.back) {
     const row = el("div", "drow");
@@ -428,9 +516,157 @@ function paintCard() {
 }
 
 function route() {
-  const code = decodeURIComponent(location.hash.replace(/^#/, ""));
-  if (code) renderPack(code); else renderList();
+  const h = decodeURIComponent(location.hash.replace(/^#/, ""));
+  renderTabs();
+  if (h === "packs") renderList();
+  else if (h === "constants") renderConstants();
+  else if (h === "" || h === "cards") renderAllCards();
+  else renderPack(h);
   window.scrollTo(0, 0);
+}
+
+/* ---------- 전체 카드 목록 ---------- */
+let cardFilters = new Set();
+
+function renderAllCards() {
+  document.title = "전체 카드 목록 — CyanPro Card Database";
+  view.textContent = "";
+
+  const head = el("div", "pagehead");
+  head.append(el("h2", null, "전체 카드 목록"));
+  const unpacked = allCards.filter(c => !c.number).length;
+  head.append(el("p", null,
+    `카드 ${allCards.length}장` + (unpacked ? ` · 이 중 ${unpacked}장은 아직 팩에 수록되지 않았다` : "")));
+  view.append(head);
+
+  const bar = el("div", "toolbar");
+  const filter = el("input", "filter");
+  filter.type = "search";
+  filter.placeholder = "카드명 · 번호 · 텍스트 검색";
+  bar.append(filter);
+  view.append(bar);
+
+  const kinds = [
+    ["액세스", "--f-access"], ["페어링", "--f-pairing"], ["기프트", "--f-gift"],
+    ["키", "--f-key"], ["융합", "--f-fusion"], ["싱크로", "--f-synchro"],
+    ["엑시즈", "--f-xyz"], ["링크", "--f-link"],
+    ["마법", "--f-spell"], ["함정", "--f-trap"],
+  ].filter(([k]) => allCards.some(c => c.types.includes(k)));
+
+  const chips = el("div", "chiprow");
+  for (const [k, color] of kinds) {
+    const b = el("button", "fchip");
+    b.setAttribute("aria-pressed", cardFilters.has(k) ? "true" : "false");
+    const dot = el("span", "dot");
+    dot.style.setProperty("--sw", `var(${color})`);
+    b.append(dot, document.createTextNode(k));
+    b.addEventListener("click", () => {
+      cardFilters.has(k) ? cardFilters.delete(k) : cardFilters.add(k);
+      b.setAttribute("aria-pressed", cardFilters.has(k) ? "true" : "false");
+      draw(filter.value);
+    });
+    chips.append(b);
+  }
+  if (kinds.length) view.append(chips);
+
+  const ul = el("ul", "cardgrid");
+  const draw = q => {
+    ul.textContent = "";
+    const n = q.trim().toLowerCase();
+    const hits = allCards.filter(c => {
+      if (cardFilters.size && ![...cardFilters].some(k => c.types.includes(k))) return false;
+      if (!n) return true;
+      return c.name.toLowerCase().includes(n)
+        || (c.number || "").toLowerCase().includes(n)
+        || String(c.id).includes(n)
+        || (c.text || "").toLowerCase().includes(n);
+    });
+    if (!hits.length) { ul.append(el("li", "empty", "조건에 맞는 카드가 없다.")); return; }
+    for (const c of hits) ul.append(cardCell(c));
+  };
+  filter.addEventListener("input", () => draw(filter.value));
+  view.append(ul);
+  draw("");
+}
+
+/* ---------- 코드 일람 ---------- */
+function renderConstants() {
+  document.title = "코드 일람 — CyanPro Card Database";
+  view.textContent = "";
+
+  const head = el("div", "pagehead");
+  head.append(el("h2", null, "코드 일람"));
+  head.append(el("p", null, constants.source
+    ? `CyanCore 엔진의 ${constants.source} 에서 생성했다. 스크립트를 짤 때 이 값이 실제 동작 기준이다.`
+    : "엔진 리포를 찾지 못해 비어 있다."));
+  view.append(head);
+
+  if (constants.drift && constants.drift.length) {
+    const box = el("div", "warnbox");
+    box.append(el("h3", null, "constant.lua 와 어긋나는 값"));
+    box.append(el("p", null,
+      "카드 리포의 script/constant.lua 는 EDOPro 원본이라, CyanCore 가 다시 할당한 비트를 다른 이름으로 알고 있다. " +
+      "아래 이름을 스크립트에 쓰면 엔진은 오른쪽 의미로 처리한다."));
+    const tbl = el("table", "drifttable");
+    const thead = document.createElement("tr");
+    for (const h of ["값", "constant.lua", "CyanCore 실제"]) thead.append(el("th", null, h));
+    tbl.append(thead);
+    for (const d of constants.drift) {
+      const tr = document.createElement("tr");
+      if (d.kind === "name") {
+        tr.append(el("td", null, d.value), el("td", "bad", d.lua), el("td", "good", d.engine));
+      } else {
+        tr.append(el("td", null, d.name), el("td", "bad", d.lua), el("td", "good", d.engine));
+      }
+      tbl.append(tr);
+    }
+    box.append(tbl);
+    view.append(box);
+  }
+
+  const bar = el("div", "toolbar");
+  const filter = el("input", "filter");
+  filter.type = "search";
+  filter.placeholder = "상수명 · 값 검색 (예: TYPE_, 0x8000)";
+  bar.append(filter);
+  view.append(bar);
+
+  const host = el("div");
+  const custom = new Set([...(constants.custom || []),
+                          ...(constants.drift || []).map(d => d.engine)]);
+  const draw = q => {
+    host.textContent = "";
+    const n = q.trim().toLowerCase();
+    let shown = 0;
+    for (const g of constants.groups) {
+      const hits = g.entries.filter(e => !n ||
+        e.name.toLowerCase().includes(n) ||
+        e.value.toLowerCase().includes(n) ||
+        (e.note || "").toLowerCase().includes(n));
+      if (!hits.length) continue;
+      shown += hits.length;
+      const sec = el("div", "constgroup");
+      sec.append(el("h3", null, g.prefix));
+      const wrap = el("div", "constwrap");
+      const tbl = el("table", "consttable");
+      const tr = document.createElement("tr");
+      for (const h of ["이름", "값", "비고"]) tr.append(el("th", null, h));
+      tbl.append(tr);
+      for (const e of hits) {
+        const row = document.createElement("tr");
+        if (custom.has(e.name)) row.className = "custom";
+        row.append(el("td", "nm", e.name), el("td", "vl", e.value), el("td", "nt", e.note || ""));
+        tbl.append(row);
+      }
+      wrap.append(tbl);
+      sec.append(wrap);
+      host.append(sec);
+    }
+    if (!shown) host.append(el("p", "empty", "조건에 맞는 상수가 없다."));
+  };
+  filter.addEventListener("input", () => draw(filter.value));
+  view.append(host);
+  draw("");
 }
 window.addEventListener("hashchange", route);
 modal.addEventListener("click", e => { if (e.target === modal) modal.close(); });
@@ -440,7 +676,8 @@ document.addEventListener("keydown", e => {
     openState.flipped = !openState.flipped; paintCard();
   }
 });
-loadPacks().then(route).catch(err => view.append(el("p", "empty", "데이터를 불러오지 못했다: " + err.message)));
+loadAll().then(route).catch(err =>
+  view.append(el("p", "empty", "데이터를 불러오지 못했다: " + err.message)));
 </script>
 </body>
 </html>
