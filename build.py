@@ -164,10 +164,33 @@ def parse_meta(meta_lines):
 # ---------------------------------------------------------------- 메인
 
 def load_json(path, default):
+    """손으로 고치는 설정 파일을 읽는다.
+
+    후행 쉼표와 // 주석은 JSON 표준이 아니지만 흔한 실수라 받아준다.
+    그래도 못 읽으면 어느 파일 몇 번째 줄인지 알려주고 멈춘다.
+    """
     if not os.path.exists(path):
         return default
-    with open(path, encoding="utf-8") as fh:
-        return json.load(fh)
+    raw = open(path, encoding="utf-8").read()
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        pass
+
+    cleaned = re.sub(r"(^|[^:])//[^\n]*", r"\1", raw)      # // 주석
+    cleaned = re.sub(r",(\s*[\]\}])", r"\1", cleaned)      # 후행 쉼표
+    try:
+        value = json.loads(cleaned)
+    except json.JSONDecodeError as err:
+        name = os.path.basename(path)
+        line = raw.split("\n")[err.lineno - 1] if err.lineno else ""
+        sys.exit(
+            f"\n{name} 을 읽지 못했다 — {err.lineno}번째 줄, {err.colno}번째 글자.\n"
+            f"  {line.strip()}\n"
+            f"  ({err.msg})\n\n"
+            "흔한 원인: 따옴표나 괄호가 짝이 안 맞거나, 값 사이 쉼표가 빠졌다.\n")
+    print(f"  알림: {os.path.basename(path)} 의 후행 쉼표/주석을 무시하고 읽었다")
+    return value
 
 
 def main():

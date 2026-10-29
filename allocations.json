@@ -30,11 +30,11 @@
       "purpose": "스카이워커",
       "note": "",
       "status": "active"
-    },		
+    }		
   ],
   "setcodes": [
-    { "code": "0x100", "name": "마칭 파이어", "owner": "키로스타스", "note": "" },
-    { "code": "0x101", "name": "도와줘", "owner": "이피", "note": "" },
-    { "code": "0x102", "name": "스카이워커", "owner": "시안색새벽", "note": "" },
+    { "code": "0x300", "name": "마칭 파이어", "owner": "키로스타스", "note": "" },
+    { "code": "0x301", "name": "도와줘", "owner": "이피", "note": "" },
+    { "code": "0x302", "name": "스카이워커", "owner": "시안색새벽", "note": "" }
   ]
 }
