@@ -346,12 +346,22 @@ function linkGrid(markers) {
   return g;
 }
 
-let bust = "";
+// 빌드 시각을 모든 데이터 URL 에 붙인다. 새 빌드가 올라가면 URL 이 바뀌므로
+// 목록만 새 것이고 상세는 캐시된 옛날 것인 상태가 생기지 않는다.
+let dataVersion = "";
+
 const grab = async (path, fallback) => {
   try {
-    const url = bust ? `${path}?t=${bust}` : path;
-    return await (await fetch(url, { cache: bust ? "reload" : "default" })).json();
+    const url = dataVersion ? `${path}?v=${encodeURIComponent(dataVersion)}` : path;
+    return await (await fetch(url)).json();
   } catch { return fallback; }
+};
+
+// report.json 만은 항상 캐시를 건너뛰고 받아 와, 지금 서버에 있는 빌드가 무엇인지 확인한다.
+const grabReport = async () => {
+  try {
+    return await (await fetch(`report.json?t=${Date.now()}`, { cache: "no-store" })).json();
+  } catch { return null; }
 };
 
 function showBuiltAt(report) {
@@ -367,6 +377,10 @@ function showBuiltAt(report) {
 }
 
 async function loadAll() {
+  const report = await grabReport();
+  dataVersion = (report && report.built_at) || "";
+  showBuiltAt(report);
+
   [icons, packs, allCards, constants] = await Promise.all([
     grab("data/icons.json", {}),
     grab("data/packs.json", []),
@@ -375,7 +389,6 @@ async function loadAll() {
   ]);
   allocations = await grab("data/allocations.json",
     { ranges: [], setcodes: [], issues: [], rules: {} });
-  showBuiltAt(await grab("report.json", null));
   byId.clear();
   for (const c of allCards) byId.set(c.id, c);
   cache.clear();
@@ -440,7 +453,11 @@ function renderList() {
 
 async function renderPack(code) {
   if (!packs.some(p => p.code === code)) { location.hash = "packs"; return; }
-  if (!cache.has(code)) cache.set(code, await (await fetch(`data/pack-${code}.json`)).json());
+  if (!cache.has(code)) {
+    const data = await grab(`data/pack-${code}.json`, null);
+    if (!data) { view.append(el("p", "empty", "팩 데이터를 불러오지 못했다.")); return; }
+    cache.set(code, data);
+  }
   const data = cache.get(code);
   document.title = `${data.name} — CyanPro Card Database`;
   view.textContent = "";
@@ -970,7 +987,6 @@ refreshBtn.addEventListener("click", async () => {
   refreshBtn.classList.add("spin");
   refreshLabel.textContent = "받는 중";
   const before = JSON.stringify([allCards.length, packs.length, allocations.ranges.length]);
-  bust = String(Date.now());
   try {
     await loadAll();
     route();
