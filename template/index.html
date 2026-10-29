@@ -95,9 +95,15 @@ main{padding-block:26px 56px;min-height:60vh}
 .attr svg{width:13px;height:13px;fill:#fff}
 .attr.lg{width:30px;height:30px}
 .attr.lg svg{width:18px;height:18px}
+/* icons/ 에 파일이 있으면 배지 대신 그림을 그대로 쓴다 */
+.attr.custom{background:none;box-shadow:none;width:19px;height:19px}
+.attr.custom.lg{width:28px;height:28px}
+.attr.custom img{width:100%;height:100%;object-fit:contain;display:block;
+  filter:drop-shadow(0 1px 2px rgba(0,0,0,.45))}
 .stars{display:inline-flex;gap:2px;flex-wrap:wrap;align-items:center}
 .stars svg{width:13px;height:13px;fill:var(--a-light)}
 .stars.rank svg{fill:var(--f-xyz)}
+.stars img{width:14px;height:14px;object-fit:contain;display:block}
 .linkgrid{display:grid;grid-template-columns:repeat(3,9px);grid-template-rows:repeat(3,9px);gap:2px}
 .linkgrid i{background:var(--surface-3);border-radius:2px}
 .linkgrid i.on{background:var(--f-link)}
@@ -184,6 +190,7 @@ const modalBody = document.getElementById("modalBody");
 const mtop = document.getElementById("mtop");
 let packs = [];
 let openState = null;
+let icons = {};
 const cache = new Map();
 
 const el = (t, c, x) => { const n = document.createElement(t); if (c) n.className = c; if (x != null) n.textContent = x; return n; };
@@ -199,16 +206,30 @@ const frameVar = c => `var(--f-${c.frame || "effect"})`;
 function attrBadge(name, big) {
   if (!name || !ATTRS[name]) return null;
   const [glyph, color] = ATTRS[name];
-  const d = el("span", "attr" + (big ? " lg" : ""));
-  d.style.setProperty("--ac", `var(${color})`);
+  const custom = icons["attr-" + glyph];
+  const d = el("span", "attr" + (big ? " lg" : "") + (custom ? " custom" : ""));
   d.title = name + " 속성";
   d.setAttribute("aria-label", name + " 속성");
-  d.append(svgUse("g-" + glyph));
+  if (custom) {
+    const im = el("img"); im.src = custom; im.alt = ""; im.loading = "lazy";
+    d.append(im);
+  } else {
+    d.style.setProperty("--ac", `var(${color})`);
+    d.append(svgUse("g-" + glyph));
+  }
   return d;
 }
 function starRow(n, isRank) {
   const box = el("span", "stars" + (isRank ? " rank" : ""));
-  for (let i = 0; i < Math.min(n, 13); i++) box.append(svgUse("g-star"));
+  const custom = icons[isRank ? "rank" : "level"];
+  for (let i = 0; i < Math.min(n, 13); i++) {
+    if (custom) {
+      const im = el("img"); im.src = custom; im.alt = ""; im.loading = "lazy";
+      box.append(im);
+    } else {
+      box.append(svgUse("g-star"));
+    }
+  }
   box.title = (isRank ? "랭크 " : "레벨 ") + n;
   return box;
 }
@@ -221,6 +242,9 @@ function linkGrid(markers) {
 }
 
 async function loadPacks() {
+  try {
+    icons = await (await fetch("data/icons.json")).json();
+  } catch { icons = {}; }
   packs = await (await fetch("data/packs.json")).json();
   topsub.textContent = `팩 ${packs.length} · 카드 ${packs.reduce((a, p) => a + p.count, 0)}`;
 }

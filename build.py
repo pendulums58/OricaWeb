@@ -340,6 +340,38 @@ def main():
     if missing:
         warnings.append(f"이미지 없는 카드 {len(missing)}장: {', '.join(missing[:10])}")
 
+    os.makedirs(os.path.join(DIST, "data"), exist_ok=True)
+
+    # ---- 선택 아이콘 ----
+    # icons/ 폴더에 파일을 넣으면 사이트가 그걸 쓰고, 없으면 내장 SVG 로 그린다.
+    # 파일명은 아래 ICON_SLOTS 의 키. 확장자는 png / webp / svg / jpg 아무거나.
+    ICON_SLOTS = [
+        "attr-earth", "attr-water", "attr-fire", "attr-wind",
+        "attr-light", "attr-dark", "attr-divine",
+        "level", "rank", "link",
+    ]
+    icon_src = os.path.join(HERE, "icons")
+    icons = {}
+    if os.path.isdir(icon_src):
+        out_dir = os.path.join(DIST, "icons")
+        os.makedirs(out_dir, exist_ok=True)
+        for slot in ICON_SLOTS:
+            for ext in (".png", ".webp", ".svg", ".jpg", ".jpeg"):
+                cand = os.path.join(icon_src, slot + ext)
+                if os.path.exists(cand):
+                    shutil.copy2(cand, os.path.join(out_dir, slot + ext))
+                    icons[slot] = f"icons/{slot}{ext}"
+                    break
+        found = len(icons)
+        if found:
+            warnings.append(
+                f"icons/ 에서 {found}개를 찾아 적용했다"
+                + (f" (나머지 {len(ICON_SLOTS) - found}개는 내장 아이콘을 쓴다)"
+                   if found < len(ICON_SLOTS) else ""))
+
+    with open(os.path.join(DIST, "data", "icons.json"), "w", encoding="utf-8") as fh:
+        json.dump(icons, fh, ensure_ascii=False, indent=1)
+
     # ---- 팩 목록 ----
     os.makedirs(os.path.join(DIST, "data"), exist_ok=True)
     index = []
@@ -379,6 +411,7 @@ def main():
         "packs": len(index),
         "cards": sum(p["count"] for p in index),
         "images": copied,
+        "custom_icons": len(icons),
         "skipped_no_number": skipped,
         "warnings": warnings,
     }
