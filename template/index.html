@@ -170,6 +170,43 @@ dialog::backdrop{background:rgba(4,10,14,.62)}
 .drifttable .bad{color:var(--f-trap)}
 .drifttable .good{color:var(--accent)}
 
+/* 할당 현황 — 스프레드시트 느낌 */
+.sheetwrap{overflow-x:auto;border:1px solid var(--line);border-radius:11px;background:var(--surface);margin-bottom:22px}
+table.sheet{width:100%;border-collapse:collapse;font-size:12.5px;min-width:720px}
+table.sheet th{position:sticky;top:0;background:var(--surface-2);text-align:left;font-size:10.5px;
+  letter-spacing:.05em;color:var(--fg-dim);font-weight:600;padding:8px 12px;white-space:nowrap;
+  border-bottom:1px solid var(--line);z-index:1}
+table.sheet td{padding:8px 12px;border-bottom:1px solid var(--line-soft);vertical-align:middle}
+table.sheet tr:last-child td{border-bottom:none}
+table.sheet tbody tr:hover{background:var(--surface-2)}
+table.sheet td.id{font-family:var(--font-mono);white-space:nowrap;font-variant-numeric:tabular-nums}
+table.sheet td.num{font-family:var(--font-mono);text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+table.sheet td.code{font-family:var(--font-mono);color:var(--accent);white-space:nowrap}
+table.sheet td.who{font-weight:600}
+table.sheet td.who.none{font-weight:400;color:var(--fg-faint);font-style:italic}
+.gauge{display:flex;align-items:center;gap:8px;min-width:120px}
+.gbar{flex:1;height:6px;border-radius:3px;background:var(--surface-3);overflow:hidden;min-width:52px}
+.gbar i{display:block;height:100%;background:var(--accent);border-radius:3px}
+.gbar i.full{background:var(--f-trap)}
+.gbar i.high{background:var(--f-gift)}
+.gnum{font-family:var(--font-mono);font-size:11px;color:var(--fg-dim);white-space:nowrap;font-variant-numeric:tabular-nums}
+.statetag{font-size:10.5px;border-radius:999px;padding:2px 9px;border:1px solid var(--line);color:var(--fg-dim);white-space:nowrap}
+.statetag.active{border-color:var(--accent);color:var(--accent)}
+.statetag.done{border-color:var(--f-synchro);color:var(--f-synchro)}
+.rowcards{font-size:11.5px;color:var(--fg-dim)}
+.rowcards button{font-size:11.5px;color:var(--accent);text-decoration:underline;padding:0}
+.subrow td{background:var(--surface-2);padding-top:4px;padding-bottom:10px}
+.cardlist{display:flex;flex-wrap:wrap;gap:5px}
+.cardlist span{font-size:11px;font-family:var(--font-mono);background:var(--surface);
+  border:1px solid var(--line);border-radius:6px;padding:2px 8px}
+.howto{border:1px solid var(--line);border-radius:11px;padding:14px 16px;margin-bottom:22px;background:var(--surface)}
+.howto h3{margin:0 0 8px;font-size:12.5px;font-weight:700}
+.howto p{margin:0 0 9px;font-size:12.3px;line-height:1.65;color:var(--fg-dim)}
+.howto pre{margin:0;font-family:var(--font-mono);font-size:11px;line-height:1.6;background:var(--surface-2);
+  border-radius:8px;padding:11px 12px;overflow-x:auto}
+.secthead{display:flex;align-items:baseline;gap:10px;margin:0 0 10px}
+.secthead h3{margin:0;font-size:14px;font-weight:700}
+.secthead span{font-family:var(--font-mono);font-size:11px;color:var(--fg-faint)}
 .constgroup{margin-bottom:22px}
 .constgroup h3{margin:0 0 8px;font-size:12px;font-weight:600;letter-spacing:.07em;color:var(--accent)}
 .consttable{width:100%;border-collapse:collapse;font-size:12px}
@@ -234,6 +271,7 @@ const mtop = document.getElementById("mtop");
 let packs = [];
 let allCards = [];
 let constants = { groups: [], drift: [], custom: [], source: null };
+let allocations = { ranges: [], setcodes: [], issues: [], rules: {} };
 let openState = null;
 let icons = {};
 const cache = new Map();
@@ -298,6 +336,8 @@ async function loadAll() {
     grab("data/cards.json", []),
     grab("data/constants.json", { groups: [], drift: [], custom: [], source: null }),
   ]);
+  allocations = await grab("data/allocations.json",
+    { ranges: [], setcodes: [], issues: [], rules: {} });
   for (const c of allCards) byId.set(c.id, c);
   topsub.textContent = `카드 ${allCards.length} · 팩 ${packs.length}`;
   renderTabs();
@@ -308,6 +348,7 @@ const TABS = [
   { id: "packs",     label: "팩 목록",        count: () => packs.length },
   { id: "constants", label: "코드 일람",
     count: () => constants.groups.reduce((a, g) => a + g.entries.length, 0) },
+  { id: "alloc", label: "할당 현황", count: () => allocations.ranges.length },
 ];
 
 function renderTabs() {
@@ -328,7 +369,7 @@ function renderTabs() {
 function currentTab() {
   const h = decodeURIComponent(location.hash.replace(/^#/, ""));
   if (!h) return "cards";
-  if (h === "packs" || h === "constants" || h === "cards") return h;
+  if (["packs", "constants", "cards", "alloc"].includes(h)) return h;
   return "packs";   // #RS01 같은 팩 코드
 }
 
@@ -520,6 +561,7 @@ function route() {
   renderTabs();
   if (h === "packs") renderList();
   else if (h === "constants") renderConstants();
+  else if (h === "alloc") renderAlloc();
   else if (h === "" || h === "cards") renderAllCards();
   else renderPack(h);
   window.scrollTo(0, 0);
@@ -587,6 +629,188 @@ function renderAllCards() {
   filter.addEventListener("input", () => draw(filter.value));
   view.append(ul);
   draw("");
+}
+
+/* ---------- 할당 현황 ---------- */
+const fmtId = n => String(n);
+
+function renderAlloc() {
+  document.title = "할당 현황 — CyanPro Card Database";
+  view.textContent = "";
+
+  const head = el("div", "pagehead");
+  head.append(el("h2", null, "할당 현황"));
+  const totalReserved = allocations.ranges.reduce((a, r) => a + r.size, 0);
+  const totalUsed = allocations.ranges.reduce((a, r) => a + r.used, 0);
+  head.append(el("p", null,
+    `예약 구간 ${allocations.ranges.length}개 · ID ${totalUsed}/${totalReserved} 사용 · 카드군 ${allocations.setcodes.length}개`));
+  view.append(head);
+
+  if (allocations.issues && allocations.issues.length) {
+    const box = el("div", "warnbox");
+    box.append(el("h3", null, `확인이 필요한 항목 ${allocations.issues.length}건`));
+    const ul = document.createElement("ul");
+    ul.style.cssText = "margin:0;padding-left:18px;font-size:12.3px;line-height:1.7;color:var(--fg-dim)";
+    for (const it of allocations.issues) ul.append(el("li", null, it.detail));
+    box.append(ul);
+    view.append(box);
+  }
+
+  /* --- ID 구간 --- */
+  const h1 = el("div", "secthead");
+  h1.append(el("h3", null, "ID 구간"));
+  h1.append(el("span", null, "9자리 카드 번호 · 카드군과 독립"));
+  view.append(h1);
+
+  const wrap1 = el("div", "sheetwrap");
+  const t1 = el("table", "sheet");
+  const thead1 = document.createElement("thead");
+  const hr1 = document.createElement("tr");
+  for (const h of ["구간", "담당", "용도", "사용량", "다음 빈 번호", "상태", "비고"])
+    hr1.append(el("th", null, h));
+  thead1.append(hr1);
+  t1.append(thead1);
+
+  const tb1 = document.createElement("tbody");
+  if (!allocations.ranges.length) {
+    const tr = document.createElement("tr");
+    const td = el("td", null, "아직 예약된 구간이 없다. allocations.json 에 추가하면 여기 나온다.");
+    td.colSpan = 7; td.style.cssText = "color:var(--fg-faint);padding:22px 12px;text-align:center";
+    tr.append(td); tb1.append(tr);
+  }
+  for (const r of allocations.ranges) {
+    const tr = document.createElement("tr");
+    tr.append(el("td", "id", `${fmtId(r.from)} – ${fmtId(r.to)}`));
+    tr.append(el("td", "who" + (r.owner ? "" : " none"), r.owner || "미배정"));
+    tr.append(el("td", null, r.purpose || "—"));
+
+    const g = el("td");
+    const gauge = el("div", "gauge");
+    const bar = el("div", "gbar");
+    const fill = el("i");
+    const pct = r.size ? Math.round(r.used / r.size * 100) : 0;
+    fill.style.width = Math.max(pct, r.used ? 3 : 0) + "%";
+    if (pct >= 100) fill.className = "full";
+    else if (pct >= 80) fill.className = "high";
+    bar.append(fill);
+    gauge.append(bar, el("span", "gnum", `${r.used}/${r.size}`));
+    g.append(gauge);
+    tr.append(g);
+
+    tr.append(el("td", "id", r.next_free == null ? "가득 참" : fmtId(r.next_free)));
+    const st = el("td");
+    st.append(el("span", "statetag " + (r.status === "active" ? "active" : "done"),
+                 r.status === "active" ? "진행 중" : r.status));
+    tr.append(st);
+
+    const note = el("td", "rowcards");
+    note.append(document.createTextNode(r.note || ""));
+    if (r.cards && r.cards.length) {
+      if (r.note) note.append(document.createTextNode(" "));
+      const btn = el("button", null, `카드 ${r.cards.length}장 보기`);
+      let open = false;
+      const sub = document.createElement("tr");
+      sub.className = "subrow";
+      sub.hidden = true;
+      const subtd = document.createElement("td");
+      subtd.colSpan = 7;
+      const list = el("div", "cardlist");
+      for (const c of r.cards) list.append(el("span", null, `${c.id} ${c.name}`));
+      subtd.append(list);
+      sub.append(subtd);
+      btn.addEventListener("click", () => {
+        open = !open;
+        sub.hidden = !open;
+        btn.textContent = open ? "접기" : `카드 ${r.cards.length}장 보기`;
+      });
+      note.append(btn);
+      tr.append(note);
+      tb1.append(tr, sub);
+      continue;
+    }
+    tr.append(note);
+    tb1.append(tr);
+  }
+  t1.append(tb1);
+  wrap1.append(t1);
+  view.append(wrap1);
+
+  /* --- 카드군 코드 --- */
+  const h2 = el("div", "secthead");
+  h2.append(el("h3", null, "카드군 코드"));
+  h2.append(el("span", null, "setcode · 0x300 부터 · ID 구간과 독립"));
+  view.append(h2);
+
+  const wrap2 = el("div", "sheetwrap");
+  const t2 = el("table", "sheet");
+  t2.style.minWidth = "480px";
+  const thead2 = document.createElement("thead");
+  const hr2 = document.createElement("tr");
+  for (const h of ["코드", "카드군", "담당", "사용 카드", "비고"]) hr2.append(el("th", null, h));
+  thead2.append(hr2);
+  t2.append(thead2);
+  const tb2 = document.createElement("tbody");
+  if (!allocations.setcodes.length) {
+    const tr = document.createElement("tr");
+    const td = el("td", null, "아직 할당된 카드군 코드가 없다.");
+    td.colSpan = 5; td.style.cssText = "color:var(--fg-faint);padding:22px 12px;text-align:center";
+    tr.append(td); tb2.append(tr);
+  }
+  for (const sc of allocations.setcodes) {
+    const tr = document.createElement("tr");
+    tr.append(el("td", "code", sc.code));
+    tr.append(el("td", null, sc.name || "—"));
+    tr.append(el("td", "who" + (sc.owner ? "" : " none"), sc.owner || "미배정"));
+
+    const uc = el("td", "num");
+    if (sc.used) {
+      const btn = el("button", null, `${sc.used}장`);
+      btn.style.cssText = "font-family:var(--font-mono);color:var(--accent);text-decoration:underline;padding:0";
+      const sub = document.createElement("tr");
+      sub.className = "subrow"; sub.hidden = true;
+      const subtd = document.createElement("td");
+      subtd.colSpan = 5;
+      const list = el("div", "cardlist");
+      for (const c of sc.cards) list.append(el("span", null, `${c.id} ${c.name}`));
+      subtd.append(list); sub.append(subtd);
+      let open = false;
+      btn.addEventListener("click", () => {
+        open = !open; sub.hidden = !open;
+        btn.textContent = open ? "접기" : `${sc.used}장`;
+      });
+      uc.append(btn);
+      tr.append(uc, el("td", "rowcards", sc.note || ""));
+      tb2.append(tr, sub);
+      continue;
+    }
+    uc.append(el("span", null, "0"));
+    uc.style.color = "var(--fg-faint)";
+    tr.append(uc, el("td", "rowcards", sc.note || ""));
+    tb2.append(tr);
+  }
+  t2.append(tb2);
+  wrap2.append(t2);
+  view.append(wrap2);
+
+  /* --- 추가 방법 --- */
+  const how = el("div", "howto");
+  how.append(el("h3", null, "추가하려면"));
+  how.append(el("p", null,
+    "리포의 allocations.json 을 고치고 커밋하면 다음 빌드에 반영된다. 쓰기 권한이 있는 사람만 고칠 수 있다. " +
+    "ID 구간과 카드군 코드는 서로 묶이지 않으므로 각자 필요한 쪽만 추가하면 된다."));
+  const pre = document.createElement("pre");
+  pre.textContent = `"ranges": [
+  { "from": 130000100, "to": 130000199,
+    "owner": "스크립터 이름",
+    "purpose": "범용 팩",       // 자유 텍스트
+    "note": "", "status": "active" }
+],
+"setcodes": [
+  { "code": "0x301", "name": "카드군 이름",
+    "owner": "스크립터 이름", "note": "" }
+]`;
+  how.append(pre);
+  view.append(how);
 }
 
 /* ---------- 코드 일람 ---------- */

@@ -334,6 +334,137 @@ def main():
         all_cards.append(card)
     all_cards.sort(key=lambda c: (c.get("number") or "zzz", c["id"]))
 
+    # ---- 할당 현황 ----
+    # allocations.json 에 적힌 예약 구간을, 실제 cdb 에 존재하는 ID 와 맞춰 본다.
+    alloc_src = load_json(os.path.join(HERE, "allocations.json"),
+                          {"ranges": [], "setcodes": []})
+    used_ids = sorted(seen_ids.keys())
+    id_source = dict(seen_ids)
+
+    # 카드 이름을 붙여 두면 시트에서 바로 확인할 수 있다
+    name_of = {}
+    for fname, row in records:
+        name_of[row["id"]] = row["name"]
+
+    alloc_ranges = []
+    for r in alloc_src.get("ranges", []):
+        lo, hi = int(r["from"]), int(r["to"])
+        inside = [i for i in used_ids if lo <= i <= hi]
+        entry = {
+            "from": lo,
+            "to": hi,
+            "size": hi - lo + 1,
+            "owner": r.get("owner") or "",
+            # 용도는 자유 텍스트. 카드군 코드와는 독립이다 —
+            # 한 구간에 여러 카드군이 섞일 수도, 한 카드군이 여러 구간에 걸칠 수도 있다.
+            "purpose": r.get("purpose") or r.get("archetype") or "",
+            "note": r.get("note") or "",
+            "status": r.get("status") or "active",
+            "used": len(inside),
+            "next_free": None,
+            "cards": [{"id": i, "name": name_of.get(i, ""),
+                       "source": id_source.get(i, "")} for i in inside],
+        }
+        taken = set(inside)
+        for i in range(lo, hi + 1):
+            if i not in taken:
+                entry["next_free"] = i
+                break
+        alloc_ranges.append(entry)
+    alloc_ranges.sort(key=lambda r: r["from"])
+
+    alloc_issues = []
+
+    # 구간끼리 겹치나
+    for a, b in zip(alloc_ranges, alloc_ranges[1:]):
+        if b["from"] <= a["to"]:
+            alloc_issues.append({
+                "kind": "overlap",
+                "detail": f"{a['from']}–{a['to']} ({a['owner'] or '미배정'}) 과 "
+                          f"{b['from']}–{b['to']} ({b['owner'] or '미배정'}) 이 겹친다"})
+
+    # 어느 구간에도 안 들어가는 ID 가 실제로 쓰이고 있나
+    def in_any(i):
+        return any(r["from"] <= i <= r["to"] for r in alloc_ranges)
+
+    orphans = [i for i in used_ids if not in_any(i)]
+    for i in orphans[:50]:
+        alloc_issues.append({
+            "kind": "orphan",
+            "detail": f"{i} ({name_of.get(i, '?')}) 가 예약 구간 밖에서 쓰이고 있다",
+            "id": i})
+    if len(orphans) > 50:
+        alloc_issues.append({
+            "kind": "orphan",
+            "detail": f"… 예약 구간 밖 ID 가 {len(orphans) - 50}개 더 있다"})
+
+    # setcode 중복 / 공식 대역 침범
+    seen_codes = {}
+    alloc_setcodes = []
+    for sc in alloc_src.get("setcodes", []):
+        raw = str(sc.get("code", "")).strip()
+        try:
+            val = int(raw, 0)
+        except ValueError:
+            alloc_issues.append({"kind": "setcode",
+                                 "detail": f"카드군 코드 '{raw}' 를 숫자로 읽을 수 없다"})
+            continue
+        base = val & 0xFFF
+        if base <= 0x208:
+            alloc_issues.append({
+                "kind": "setcode",
+                "detail": f"{raw} ({sc.get('name', '')}) 는 공식 카드군 대역(0x208 이하)이다"})
+        if base in seen_codes:
+            alloc_issues.append({
+                "kind": "setcode",
+                "detail": f"{raw} 가 '{seen_codes[base]}' 와 '{sc.get('name', '')}' 에 중복 할당됐다"})
+        else:
+            seen_codes[base] = sc.get("name", "")
+        alloc_setcodes.append({
+            "code": raw,
+            "value": val,
+            "name": sc.get("name") or "",
+            "owner": sc.get("owner") or "",
+            "note": sc.get("note") or "",
+        })
+    alloc_setcodes.sort(key=lambda x: x["value"])
+
+    # cdb 에 실제로 박힌 setcode 를 센다. 한 카드가 최대 4개를 16비트씩 담는다.
+    used_codes = collections.Counter()
+    code_cards = collections.defaultdict(list)
+    for fname, row in records:
+        packed = row["setcode"] or 0
+        for shift in (0, 16, 32, 48):
+            part = (packed >> shift) & 0xFFFF
+            if part:
+                used_codes[part] += 1
+                if len(code_cards[part]) < 40:
+                    code_cards[part].append(
+                        {"id": row["id"], "name": row["name"]})
+
+    for sc in alloc_setcodes:
+        sc["used"] = used_codes.get(sc["value"], 0)
+        sc["cards"] = code_cards.get(sc["value"], [])
+
+    declared = {sc["value"] for sc in alloc_setcodes}
+    for val, n in sorted(used_codes.items()):
+        if val not in declared:
+            sample = ", ".join(c["name"] for c in code_cards[val][:3])
+            alloc_issues.append({
+                "kind": "setcode",
+                "detail": f"0x{val:x} 가 카드 {n}장에 쓰이고 있는데 카드군 목록에 없다"
+                          + (f" ({sample})" if sample else "")})
+
+    allocations = {
+        "ranges": alloc_ranges,
+        "setcodes": alloc_setcodes,
+        "issues": alloc_issues,
+        "used_total": len(used_ids),
+        "rules": alloc_src.get("_규칙", {}),
+    }
+    if alloc_issues:
+        warnings.append(f"할당표 확인 필요 {len(alloc_issues)}건")
+
     # ---- 코드 일람 (엔진 헤더 기준) ----
     constants = {"source": None, "groups": [], "drift": [], "custom": []}
     if ENGINE:
@@ -532,6 +663,8 @@ def main():
         json.dump(all_cards, fh, ensure_ascii=False, indent=1)
     with open(os.path.join(DIST, "data", "constants.json"), "w", encoding="utf-8") as fh:
         json.dump(constants, fh, ensure_ascii=False, indent=1)
+    with open(os.path.join(DIST, "data", "allocations.json"), "w", encoding="utf-8") as fh:
+        json.dump(allocations, fh, ensure_ascii=False, indent=1)
 
     shutil.copy2(os.path.join(HERE, "template", "index.html"),
                  os.path.join(DIST, "index.html"))
@@ -548,6 +681,8 @@ def main():
         "all_cards": len(all_cards),
         "constants": sum(len(g["entries"]) for g in constants["groups"]),
         "drift": len(constants["drift"]),
+        "alloc_ranges": len(alloc_ranges),
+        "alloc_issues": len(alloc_issues),
         "skipped_no_number": skipped,
         "warnings": warnings,
     }
