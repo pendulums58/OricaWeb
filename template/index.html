@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>AMCTOrica 팩 목록</title>
+<title>CyanPro Card Database</title>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+KR:wght@400;500;600;700&display=swap">
 <style>
@@ -161,7 +161,7 @@ footer .wrap{padding-block:20px 36px;font-size:11.5px;color:var(--fg-faint);line
 </defs></svg>
 
 <header class="top"><div class="wrap">
-  <h1><a href="#">AMCT<em>Orica</em></a></h1>
+  <h1><a href="#">Cyan<em>Pro</em> Card Database</a></h1>
   <span class="sub" id="topsub"></span>
 </div></header>
 
@@ -250,7 +250,7 @@ async function loadPacks() {
 }
 
 function renderList() {
-  document.title = "AMCTOrica 팩 목록";
+  document.title = "CyanPro Card Database";
   view.textContent = "";
   const ul = el("ul", "packgrid");
   for (const p of packs) {
@@ -274,7 +274,7 @@ async function renderPack(code) {
   if (!packs.some(p => p.code === code)) { location.hash = ""; return; }
   if (!cache.has(code)) cache.set(code, await (await fetch(`data/pack-${code}.json`)).json());
   const data = cache.get(code);
-  document.title = `${data.name} — AMCTOrica`;
+  document.title = `${data.name} — CyanPro Card Database`;
   view.textContent = "";
 
   const row = el("div", "backrow");

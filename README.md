@@ -1,6 +1,6 @@
 # OricaWeb
 
-[AMCTOrica](https://github.com/pendulums58/AMCTOrica) 카드 리포를 읽어 팩 목록 웹사이트를 만든다.
+[CyanPro_CardDB](https://github.com/pendulums58/CyanPro_CardDB) 카드 리포를 읽어 팩 목록 웹사이트를 만든다.
 
 카드 리포는 CyanPro 사용자가 그대로 받아 쓰는 곳이라 건드리지 않는다.
 이 리포가 빌드할 때 카드 리포를 클론해서 읽기만 한다.
@@ -21,7 +21,7 @@
 
 ## 로컬에서 빌드
 
-AMCTOrica 를 이 리포와 나란히 두면 알아서 찾는다.
+CyanPro_CardDB 를 이 리포와 나란히 두면 알아서 찾는다.
 
 ```
 python build.py
@@ -31,7 +31,7 @@ cd dist && python -m http.server 8000
 다른 곳에 있으면 경로를 지정한다.
 
 ```
-ORICA_PACK_DIR=/path/to/AMCTOrica python build.py
+ORICA_PACK_DIR=/path/to/CyanPro_CardDB python build.py
 ```
 
 ## 배포

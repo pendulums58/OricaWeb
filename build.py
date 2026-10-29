@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""AMCTOrica 팩 데이터 빌드.
+"""CyanPro_CardDB 팩 데이터 빌드.
 
 리포 루트의 *.cdb 를 전부 읽어, 효과 설명 끝의 [CODE-AM001] 번호가 있는
 카드만 모아 팩 단위 JSON과 이미지를 web/dist 에 만든다.
@@ -20,21 +20,21 @@ DIST = os.path.join(HERE, "dist")
 
 
 def find_pack_dir():
-    """카드 리포(AMCTOrica)의 위치를 찾는다.
+    """카드 리포(CyanPro_CardDB)의 위치를 찾는다.
 
     ORICA_PACK_DIR 환경변수 > ./packs (CI 가 클론하는 자리) >
-    ../AMCTOrica (리포를 나란히 두고 쓰는 로컬 작업) 순으로 본다.
+    ../CyanPro_CardDB (리포를 나란히 두고 쓰는 로컬 작업) 순으로 본다.
     """
     env = os.environ.get("ORICA_PACK_DIR")
     candidates = [env] if env else []
     candidates.append(os.path.join(HERE, "packs"))
-    candidates.append(os.path.join(os.path.dirname(HERE), "AMCTOrica"))
+    candidates.append(os.path.join(os.path.dirname(HERE), "CyanPro_CardDB"))
     for path in candidates:
         if path and os.path.isdir(path) and any(
                 f.lower().endswith(".cdb") for f in os.listdir(path)):
             return os.path.abspath(path)
     sys.exit(
-        "카드 리포를 찾지 못했다. AMCTOrica 를 이 리포 옆에 두거나,\n"
+        "카드 리포를 찾지 못했다. CyanPro_CardDB 를 이 리포 옆에 두거나,\n"
         "ORICA_PACK_DIR 환경변수로 경로를 지정해라.")
 
 

@@ -25,7 +25,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Fetch card repo
-        run: git clone --depth 1 https://github.com/pendulums58/AMCTOrica.git packs
+        run: git clone --depth 1 https://github.com/pendulums58/CyanPro_CardDB.git packs
 
       - uses: actions/setup-python@v5
         with:
