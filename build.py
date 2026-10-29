@@ -8,6 +8,7 @@
 없으면 원본을 그대로 복사한다.
 """
 import collections
+import datetime
 import json
 import os
 import re
@@ -370,6 +371,27 @@ def main():
         all_cards.append(card)
     all_cards.sort(key=lambda c: (c.get("number") or "zzz", c["id"]))
 
+    # ---- 다른 일러스트 ----
+    # alias 가 원본을 가리키고 번호 차이가 ART_SPAN 이내면 같은 카드의 다른 그림으로 본다.
+    # 키 카드의 해방면은 alias 를 다른 용도로 쓰므로 제외한다 (이미 back 으로 붙어 있다).
+    ART_SPAN = 10
+    art_family = collections.defaultdict(list)
+    for fname, row in records:
+        if row["type"] & TYPE_UNLOCKED:
+            continue
+        base = row["alias"] or row["id"]
+        if row["alias"] and abs(row["id"] - row["alias"]) > ART_SPAN:
+            base = row["id"]          # 너무 멀면 별개 카드로 둔다
+        art_family[base].append(row["id"])
+
+    arts_of = {}
+    for base, ids in art_family.items():
+        if len(ids) < 2:
+            continue
+        ordered = sorted(ids)
+        for i in ordered:
+            arts_of[i] = ordered
+
     # ---- 할당 현황 ----
     # allocations.json 에 적힌 예약 구간을, 실제 cdb 에 존재하는 ID 와 맞춰 본다.
     alloc_src = load_json(os.path.join(HERE, "allocations.json"),
@@ -500,6 +522,21 @@ def main():
     }
     if alloc_issues:
         warnings.append(f"할당표 확인 필요 {len(alloc_issues)}건")
+
+    # 같은 그림 묶음을 카드에 붙인다
+    def attach_arts(card):
+        group = arts_of.get(card["id"])
+        if not group:
+            return
+        card["arts"] = [
+            {"id": i, "name": name_of.get(i, ""), "img": None}
+            for i in group]
+
+    for card in all_cards:
+        attach_arts(card)
+    for cards in packs.values():
+        for card in cards:
+            attach_arts(card)
 
     # ---- 코드 일람 (엔진 헤더 기준) ----
     constants = {"source": None, "groups": [], "drift": [], "custom": []}
@@ -635,6 +672,16 @@ def main():
     if missing:
         warnings.append(f"이미지 없는 카드 {len(missing)}장: {', '.join(missing[:10])}")
 
+    # arts 항목에 실제 이미지 경로를 채운다
+    img_of = {}
+    for card in targets:
+        if card.get("img"):
+            img_of[card["id"]] = card["img"]
+    for group in list(packs.values()) + [all_cards]:
+        for card in group:
+            for art in card.get("arts", []):
+                art["img"] = img_of.get(art["id"])
+
     os.makedirs(os.path.join(DIST, "data"), exist_ok=True)
 
     # ---- 선택 아이콘 ----
@@ -710,6 +757,8 @@ def main():
         warnings.append("정의되지 않은 타입 비트: " + ", ".join(
             f"{b} ({n}장)" for b, n in unknown_bits.most_common()))
     report = {
+        "built_at": datetime.datetime.now(datetime.timezone.utc)
+                     .replace(microsecond=0).isoformat(),
         "packs": len(index),
         "cards": sum(p["count"] for p in index),
         "images": copied,

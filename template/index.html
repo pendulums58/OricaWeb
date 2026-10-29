@@ -48,6 +48,15 @@ button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
 
 header.top{border-bottom:1px solid var(--line);background:var(--surface);position:sticky;top:0;z-index:5}
 header.top .brandrow{display:flex;align-items:center;gap:12px;padding-block:13px 9px;flex-wrap:wrap}
+.refresh{margin-left:auto;display:inline-flex;align-items:center;gap:6px;font-size:12px;
+  color:var(--fg-dim);border:1px solid var(--line);border-radius:8px;padding:5px 11px;
+  background:var(--surface-2);white-space:nowrap}
+.refresh:hover{border-color:var(--accent);color:var(--accent)}
+.refresh[disabled]{opacity:.5;cursor:default}
+.refresh .sp{display:inline-block;font-family:var(--font-mono);font-size:12px;line-height:1}
+.refresh.spin .sp{animation:rot .7s linear infinite}
+@keyframes rot{to{transform:rotate(360deg)}}
+.builtat{font-family:var(--font-mono);font-size:10.5px;color:var(--fg-faint);white-space:nowrap}
 .tabs{display:flex;gap:2px;overflow-x:auto;scrollbar-width:none}
 .tabs::-webkit-scrollbar{display:none}
 .tab{position:relative;font-size:13px;font-weight:500;color:var(--fg-dim);padding:8px 13px 10px;
@@ -138,6 +147,14 @@ dialog::backdrop{background:rgba(4,10,14,.62)}
 .atkdef span{color:var(--fg-faint);font-size:10.5px;letter-spacing:.08em;display:block}
 .atkdef b{font-weight:600;font-size:15px}
 .ctext{background:var(--surface-2);border-radius:10px;padding:14px 15px;font-size:12.9px;line-height:1.72;white-space:pre-wrap;margin-bottom:13px}
+.artstrip{display:flex;gap:7px;flex-wrap:wrap;margin:0 0 13px}
+.artbtn{width:46px;aspect-ratio:59/86;border-radius:5px;overflow:hidden;border:2px solid var(--line);
+  padding:0;background:var(--surface-2);transition:border-color .12s,transform .08s}
+.artbtn img{width:100%;height:100%;object-fit:cover;display:block}
+.artbtn:hover{transform:translateY(-2px)}
+.artbtn[aria-current="true"]{border-color:var(--fc,var(--accent))}
+.artlabel{font-size:10.5px;color:var(--fg-faint);font-family:var(--font-mono);
+  align-self:center;margin-right:3px;white-space:nowrap}
 .flipbtn{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:500;border:1px solid var(--line);border-radius:999px;padding:5px 13px;background:var(--surface-2);color:var(--fg-dim)}
 .flipbtn:hover{border-color:var(--accent);color:var(--accent)}
 .flipbtn .sw{font-family:var(--font-mono);font-size:13px;line-height:1}
@@ -241,6 +258,10 @@ footer .wrap{padding-block:20px 36px;font-size:11.5px;color:var(--fg-faint);line
   <div class="wrap brandrow">
     <h1><a href="#cards">Cyan<em>Pro</em> Card Database</a></h1>
     <span class="sub" id="topsub"></span>
+    <span class="builtat" id="builtat"></span>
+    <button class="refresh" id="refreshBtn" title="카드 데이터를 다시 받아온다">
+      <span class="sp">⟳</span><span id="refreshLabel">새로고침</span>
+    </button>
   </div>
   <nav class="wrap tabs" id="tabs" aria-label="주요 화면"></nav>
 </header>
@@ -325,9 +346,25 @@ function linkGrid(markers) {
   return g;
 }
 
+let bust = "";
 const grab = async (path, fallback) => {
-  try { return await (await fetch(path)).json(); } catch { return fallback; }
+  try {
+    const url = bust ? `${path}?t=${bust}` : path;
+    return await (await fetch(url, { cache: bust ? "reload" : "default" })).json();
+  } catch { return fallback; }
 };
+
+function showBuiltAt(report) {
+  const host = document.getElementById("builtat");
+  if (!report || !report.built_at) { host.textContent = ""; return; }
+  const t = new Date(report.built_at);
+  const mins = Math.floor((Date.now() - t.getTime()) / 60000);
+  const ago = mins < 1 ? "방금" : mins < 60 ? `${mins}분 전`
+            : mins < 1440 ? `${Math.floor(mins / 60)}시간 전`
+            : `${Math.floor(mins / 1440)}일 전`;
+  host.textContent = `갱신 ${ago}`;
+  host.title = t.toLocaleString("ko-KR");
+}
 
 async function loadAll() {
   [icons, packs, allCards, constants] = await Promise.all([
@@ -338,7 +375,10 @@ async function loadAll() {
   ]);
   allocations = await grab("data/allocations.json",
     { ranges: [], setcodes: [], issues: [], rules: {} });
+  showBuiltAt(await grab("report.json", null));
+  byId.clear();
   for (const c of allCards) byId.set(c.id, c);
+  cache.clear();
   topsub.textContent = `카드 ${allCards.length} · 팩 ${packs.length}`;
   renderTabs();
 }
@@ -445,6 +485,8 @@ function cardCell(c) {
   const badge = attrBadge(c.attribute);
   if (badge) pic.append(badge);
   if (c.back) pic.append(el("span", "twoside", "양면"));
+  else if (c.arts && c.arts.length > 1)
+    pic.append(el("span", "twoside", `일러 ${c.arts.length}`));
   b.append(pic);
 
   const cap = el("div", "cap");
@@ -465,7 +507,7 @@ function cardCell(c) {
 }
 
 function openCard(c) {
-  openState = { card: c, flipped: false };
+  openState = { card: c, flipped: false, artId: c.id };
   paintCard();
   modal.showModal();
 }
@@ -473,6 +515,7 @@ function openCard(c) {
 function paintCard() {
   const { card, flipped } = openState;
   const face = flipped && card.back ? card.back : card;
+  const art = (card.arts || []).find(a => a.id === openState.artId);
   const fc = frameVar(face);
   modalBody.textContent = "";
   mtop.style.background = fc;
@@ -485,10 +528,11 @@ function paintCard() {
   modalBody.append(cr);
 
   const head = el("div", "dhead");
-  if (face.img) {
-    const art = el("div", "art");
-    const im = el("img"); im.src = face.img; im.alt = face.name;
-    art.append(im); head.append(art);
+  const shownImg = (!flipped && art && art.img) ? art.img : face.img;
+  if (shownImg) {
+    const box = el("div", "art");
+    const im = el("img"); im.src = shownImg; im.alt = face.name;
+    box.append(im); head.append(box);
   }
   const info = el("div", "dinfo");
   info.append(el("div", "dnum", card.number || "팩 미수록"), el("h3", null, face.name));
@@ -530,6 +574,24 @@ function paintCard() {
   head.append(info);
   modalBody.append(head);
 
+  if (!flipped && card.arts && card.arts.length > 1) {
+    const strip = el("div", "artstrip");
+    strip.append(el("span", "artlabel", `일러스트 ${card.arts.length}종`));
+    for (const a of card.arts) {
+      const b = el("button", "artbtn");
+      b.title = `${a.id} ${a.name}`;
+      b.setAttribute("aria-label", a.name);
+      if (a.id === openState.artId) b.setAttribute("aria-current", "true");
+      if (a.img) {
+        const im = el("img"); im.src = a.img; im.alt = ""; im.loading = "lazy";
+        b.append(im);
+      }
+      b.addEventListener("click", () => { openState.artId = a.id; paintCard(); });
+      strip.append(b);
+    }
+    modalBody.append(strip);
+  }
+
   if (face.text) modalBody.append(el("div", "ctext", face.text));
 
   const labels = face.labels || {};
@@ -552,8 +614,9 @@ function paintCard() {
     modalBody.append(row);
   }
 
+  const shownId = (!flipped && art) ? art.id : face.id;
   modalBody.append(el("div", "note",
-    `#${face.id}` + (card.alias ? ` · 다른 그림 (원본 ${card.alias})` : "") + ` · ${face.source}`));
+    `#${shownId}` + (card.alias ? ` · 원본 ${card.alias}` : "") + ` · ${face.source}`));
 }
 
 function route() {
@@ -900,6 +963,29 @@ document.addEventListener("keydown", e => {
     openState.flipped = !openState.flipped; paintCard();
   }
 });
+const refreshBtn = document.getElementById("refreshBtn");
+const refreshLabel = document.getElementById("refreshLabel");
+refreshBtn.addEventListener("click", async () => {
+  refreshBtn.disabled = true;
+  refreshBtn.classList.add("spin");
+  refreshLabel.textContent = "받는 중";
+  const before = JSON.stringify([allCards.length, packs.length, allocations.ranges.length]);
+  bust = String(Date.now());
+  try {
+    await loadAll();
+    route();
+    const after = JSON.stringify([allCards.length, packs.length, allocations.ranges.length]);
+    refreshLabel.textContent = before === after ? "변경 없음" : "갱신됨";
+  } catch {
+    refreshLabel.textContent = "실패";
+  }
+  refreshBtn.classList.remove("spin");
+  setTimeout(() => {
+    refreshLabel.textContent = "새로고침";
+    refreshBtn.disabled = false;
+  }, 1800);
+});
+
 loadAll().then(route).catch(err =>
   view.append(el("p", "empty", "데이터를 불러오지 못했다: " + err.message)));
 </script>
