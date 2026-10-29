@@ -137,24 +137,37 @@ def split_desc(desc):
 
 
 def parse_meta(meta_lines):
+    """꼬리의 대괄호 줄들을 읽는다.
+
+    첫 줄은 제작자다 — [시안색새벽] 처럼 이름만 들어간다.
+    그 뒤로 [키 : 값] 은 라벨, 괄호만 있는 줄은 팩 이름, 마지막이 카드 번호.
+    라벨의 값이 여러 개면 | 로 나눈다.
+    """
     out = {"number": None, "code": None, "seq": None, "region": None,
            "pack_name": None, "credits": [], "labels": {}}
-    for line in meta_lines:
+
+    for index, line in enumerate(meta_lines):
         m = NUMBER.match(line)
         if m:
             out["code"], out["region"], out["seq"] = m.group(1), m.group(2), int(m.group(3))
             out["number"] = f"{m.group(1)}-{m.group(2)}{m.group(3)}"
             continue
+
         m = LABELLED.match(line)
         if m:
             key = re.sub(r"\s+", " ", m.group(1)).strip()
-            out["labels"].setdefault(key, []).append(m.group(2))
+            values = [v.strip() for v in m.group(2).split("|")]
+            values = [v for v in values if v]
+            out["labels"].setdefault(key, []).extend(values)
             continue
+
         m = PLAIN.match(line)
         if m:
             inner = m.group(1).strip()
-            # "이피 / YiPi", "시안색새벽 / 범용" 처럼 슬래시가 든 줄은 제작자 표기로 본다
-            if "/" in inner:
+            if not inner:
+                continue
+            # 맨 첫 줄은 제작자 표기로 본다
+            if index == 0:
                 out["credits"].append(inner)
             else:
                 out["pack_name"] = inner
