@@ -63,7 +63,24 @@ function validate(body) {
     if (side > 15) return fail(`사이드 덱이 ${side}장이다`);
   }
   if (body.players[0].seat === body.players[1].seat) return fail("seat 가 겹친다");
-  return { ok: true, id, winner };
+
+  const source = body.source === "sim" ? "sim" : "human";
+
+  for (const p of body.players) {
+    if (p.usage === undefined) continue;
+    if (!Array.isArray(p.usage)) return fail("usage 가 배열이 아니다");
+    if (p.usage.length > 400) return fail("usage 항목이 너무 많다");
+    for (const u of p.usage) {
+      if (!u || !Number.isInteger(u.card_id) || u.card_id <= 0)
+        return fail("usage 의 card_id 가 올바르지 않다");
+      for (const k of ["offered", "taken"]) {
+        const v = u[k];
+        if (v !== undefined && (!Number.isInteger(v) || v < 0 || v > 10000))
+          return fail(`usage 의 ${k} 가 올바르지 않다`);
+      }
+    }
+  }
+  return { ok: true, id, winner, source };
 }
 
 function tally(list) {
@@ -95,8 +112,8 @@ async function ingest(request, env, origin) {
   const stmts = [
     env.DB.prepare(
       `INSERT INTO duels (duel_id, match_id, game_no, format, winner, ended_at,
-                          version, reporter, received_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(
+                          version, reporter, received_at, source)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(
       check.id,
       body.match_id ? String(body.match_id).slice(0, 64) : null,
       Number.isFinite(Number(body.game_no)) ? Number(body.game_no) : null,
@@ -105,7 +122,8 @@ async function ingest(request, env, origin) {
       ended,
       body.version ? String(body.version).slice(0, 40) : null,
       body.reporter ? String(body.reporter).slice(0, 64) : null,
-      now),
+      now,
+      check.source),
   ];
 
   for (const p of body.players) {
@@ -114,6 +132,12 @@ async function ingest(request, env, origin) {
       "INSERT INTO duel_players (duel_id, seat, name, won) VALUES (?, ?, ?, ?)")
       .bind(check.id, seat, p.name ? String(p.name).slice(0, 60) : null,
             seat === check.winner ? 1 : 0));   // 무승부(2)면 양쪽 다 0
+
+    for (const u of (p.usage || [])) {
+      stmts.push(env.DB.prepare(
+        "INSERT INTO card_usage (duel_id, seat, card_id, offered, taken) VALUES (?, ?, ?, ?, ?)")
+        .bind(check.id, seat, u.card_id, u.offered || 0, u.taken || 0));
+    }
 
     for (const zone of ZONES) {
       for (const [cardId, qty] of tally((p.deck || {})[zone])) {
@@ -134,6 +158,11 @@ async function cardStats(env, origin, url) {
     ? ZONES : ["main", "extra"];
   const placeholders = zoneFilter.map(() => "?").join(",");
 
+  // source=human | sim | all (기본 human — 시뮬레이션이 사람 통계를 덮지 않게)
+  const want = url.searchParams.get("source") || "human";
+  const sourceSql = want === "all" ? "" : " AND d.source = ?";
+  const sourceArg = want === "all" ? [] : [want === "sim" ? "sim" : "human"];
+
   const rows = await env.DB.prepare(
     `SELECT dc.card_id            AS card_id,
             COUNT(*)                        AS decks,
@@ -146,26 +175,40 @@ async function cardStats(env, origin, url) {
               GROUP BY duel_id, seat, card_id) dc
        JOIN duel_players dp ON dp.duel_id = dc.duel_id AND dp.seat = dc.seat
        JOIN duels d         ON d.duel_id  = dc.duel_id
-      WHERE d.hidden = 0
-      GROUP BY dc.card_id`).bind(...zoneFilter).all();
+      WHERE d.hidden = 0${sourceSql}
+      GROUP BY dc.card_id`).bind(...zoneFilter, ...sourceArg).all();
+
+  const usage = await env.DB.prepare(
+    `SELECT u.card_id, SUM(u.offered) AS offered, SUM(u.taken) AS taken
+       FROM card_usage u
+       JOIN duels d ON d.duel_id = u.duel_id
+      WHERE d.hidden = 0${sourceSql}
+      GROUP BY u.card_id`).bind(...sourceArg).all();
+  const usageById = new Map((usage.results || []).map(r => [r.card_id, r]));
 
   const totals = await env.DB.prepare(
     `SELECT COUNT(*) AS decks,
             COUNT(DISTINCT dp.duel_id) AS duels
        FROM duel_players dp
        JOIN duels d ON d.duel_id = dp.duel_id
-      WHERE d.hidden = 0`).first();
+      WHERE d.hidden = 0${sourceSql}`).bind(...sourceArg).first();
 
   return json({
+    source: want,
     total_decks: totals ? totals.decks : 0,
     total_duels: totals ? totals.duels : 0,
-    cards: (rows.results || []).map(r => ({
-      id: r.card_id,
-      decks: r.decks,
-      wins: r.wins,
-      decided: r.decided,
-      copies: r.copies,
-    })),
+    cards: (rows.results || []).map(r => {
+      const u = usageById.get(r.card_id);
+      return {
+        id: r.card_id,
+        decks: r.decks,
+        wins: r.wins,
+        decided: r.decided,
+        copies: r.copies,
+        offered: u ? u.offered : 0,
+        taken: u ? u.taken : 0,
+      };
+    }),
   }, 200, origin);
 }
 
@@ -177,6 +220,8 @@ async function summary(env, origin) {
        FROM duels WHERE hidden = 0`).first();
   const hidden = await env.DB.prepare(
     "SELECT COUNT(*) AS n FROM duels WHERE hidden = 1").first();
+  const bySource = await env.DB.prepare(
+    `SELECT source, COUNT(*) AS n FROM duels WHERE hidden = 0 GROUP BY source`).all();
   const formats = await env.DB.prepare(
     `SELECT format, COUNT(*) AS n FROM duels WHERE hidden = 0
       GROUP BY format ORDER BY n DESC LIMIT 20`).all();
@@ -185,6 +230,7 @@ async function summary(env, origin) {
     first_at: d ? d.first_at : null,
     last_at: d ? d.last_at : null,
     hidden: hidden ? hidden.n : 0,
+    by_source: bySource.results || [],
     formats: formats.results || [],
   }, 200, origin);
 }

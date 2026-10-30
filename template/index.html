@@ -895,16 +895,20 @@ function wilson(wins, n, z = 1.96) {
 
 const MIN_SAMPLE = 20;   // 이보다 적으면 승률을 흐리게 보여준다
 
+let statsSource = "human";   // human | sim | all
+
 async function loadStats(force) {
   if (!CONFIG || !CONFIG.statsApi) return null;
-  if (stats && !force) return stats;
+  if (stats && stats.source === statsSource && !force) return stats;
   const base = CONFIG.statsApi.replace(/\/$/, "");
   const [cards, sum] = await Promise.all([
-    grabJson(`${base}/stats/cards`, null),
+    grabJson(`${base}/stats/cards?source=${statsSource}`, null),
     grabJson(`${base}/stats/summary`, null),
   ]);
   if (!cards) return null;
   stats = {
+    source: statsSource,
+    by_source: (sum && sum.by_source) || [],
     total_decks: cards.total_decks || 0,
     total_duels: (sum && sum.duels) || 0,
     first_at: sum && sum.first_at,
@@ -950,6 +954,20 @@ async function renderStats() {
   filter.placeholder = "카드명 검색";
   bar.append(filter);
 
+  const srcSel = document.createElement("select");
+  srcSel.className = "abtn";
+  for (const [v, label] of [["human", "사람 대전"], ["sim", "시뮬레이션"], ["all", "전체"]]) {
+    const o = document.createElement("option");
+    o.value = v; o.textContent = label;
+    if (v === statsSource) o.selected = true;
+    srcSel.append(o);
+  }
+  srcSel.addEventListener("change", () => {
+    statsSource = srcSel.value;
+    renderStats();
+  });
+  bar.append(srcSel);
+
   const sortSel = document.createElement("select");
   sortSel.className = "abtn";
   for (const [v, label] of [["decks", "채용 많은 순"], ["rate", "채용률 순"],
@@ -965,7 +983,7 @@ async function renderStats() {
   const table = el("table", "sheet");
   const thead = document.createElement("thead");
   const hr = document.createElement("tr");
-  for (const h of ["카드", "번호", "채용률", "채용 덱", "평균 매수", "승률"])
+  for (const h of ["카드", "번호", "채용률", "채용 덱", "평균 매수", "선택률", "승률"])
     hr.append(el("th", null, h));
   thead.append(hr);
   table.append(thead);
@@ -999,7 +1017,7 @@ async function renderStats() {
     if (!rows.length) {
       const tr = document.createElement("tr");
       const td = el("td", null, "조건에 맞는 카드가 없다.");
-      td.colSpan = 6;
+      td.colSpan = 7;
       td.style.cssText = "color:var(--fg-faint);padding:22px 12px;text-align:center";
       tr.append(td); tbody.append(tr);
       return;
@@ -1036,6 +1054,29 @@ async function renderStats() {
       tr.append(el("td", "num", String(r.st.decks)));
       tr.append(el("td", "num", (r.st.copies / r.st.decks).toFixed(2)));
 
+      // 분모는 드로우가 아니라 "엔진이 합법적 선택지로 제시한 횟수" 다.
+      // 서치·덤핑으로 꺼내 쓰는 비율이 높아 드로우로는 잴 수 없다.
+      const useTd = document.createElement("td");
+      if (r.st.offered) {
+        const ratio = r.st.taken / r.st.offered;
+        const box = el("span", "wr" + (ratio < 0.2 ? " thin" : ""));
+        box.append(document.createTextNode((ratio * 100).toFixed(0) + "%"));
+        box.title = `선택지로 ${r.st.offered}회 제시돼 ${r.st.taken}회 선택`;
+        useTd.append(box);
+        if (ratio < 0.2) {
+          const f = el("span", "thinflag", "미선택");
+          f.title = "AI 가 기회를 받고도 거의 고르지 않았다. 이 카드의 승률은 믿을 수 없다";
+          useTd.append(f);
+        }
+      } else if (r.st.decks) {
+        const box = el("span", "wr thin", "기회 없음");
+        box.title = "합법적 선택지로 제시된 적이 없다. 루트가 성립하지 않았거나 서치되지 않았다";
+        useTd.append(box);
+      } else {
+        useTd.append(el("span", "wr thin", "—"));
+      }
+      tr.append(useTd);
+
       const wrTd = document.createElement("td");
       if (!r.w || !r.decided) {
         wrTd.append(el("span", "wr thin", "—"));
@@ -1066,7 +1107,13 @@ async function renderStats() {
   note.textContent =
     "승률 옆 작은 숫자는 95% 신뢰구간이다. 구간이 넓으면 아직 판단하기 이르다는 뜻이다. "
     + "강한 덱에 들어간 카드는 그 카드가 강해서가 아니라 덱이 강해서 승률이 높게 나올 수 있으니, "
-    + "채용률과 같이 보는 편이 낫다. 무승부는 승률 분모에서 빠진다.";
+    + "채용률과 같이 보는 편이 낫다. 무승부는 승률 분모에서 빠진다. "
+    + "선택률은 엔진이 그 카드를 합법적 선택지로 제시한 횟수 대비 AI 가 실제로 고른 횟수다 "
+    + "(드로우가 아니라 기회가 분모다 — 서치·덤핑으로 꺼내 쓰는 비율이 높기 때문이다). "
+    + "낮으면 카드가 약한 게 아니라 AI 가 쓸 줄 모르는 것이므로 승률을 근거로 쓰지 않는 편이 낫다. "
+    + "'기회 없음' 은 또 달라서, 루트가 성립하지 않았거나 서치되지 않았다는 뜻이다. "
+    + "전개 루트로 엮인 카드들은 선택률이 서로 같게 나오므로, 어느 파츠가 중요한지는 "
+    + "그 카드를 빼고 같은 덱을 돌리는 A/B 로만 알 수 있다. 시뮬레이션에서만 기록된다.";
   view.append(note);
 }
 

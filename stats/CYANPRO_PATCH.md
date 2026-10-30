@@ -60,7 +60,9 @@
 #include <sstream>
 #include "curl.h"
 #include "config.h"        // 버전 매크로
+#include "game_config.h"   // gGameConfig (SSL 인증서 경로)
 #include "data_manager.h"  // CardDataC
+#include "bufferio.h"      // 이름 변환
 ```
 
 파일 안 익명 네임스페이스(또는 `GenericDuel` 구현 위쪽)에 헬퍼를 둔다.
@@ -99,6 +101,51 @@ void PostDuelStats(std::string payload) {
 }
 
 // Deck 의 각 존은 std::vector<const CardDataC*> 다. 카드 ID 는 code 필드에 있다.
+// DuelPlayer::name 은 uint16_t[20] (UTF-16) 이다.
+// 클라이언트가 이름을 표시할 때 쓰는 경로와 같게 UTF-8 로 바꾼다.
+std::string PlayerName(const DuelPlayer* player) {
+	if(!player)
+		return {};
+	wchar_t wname[20]{};
+	BufferIO::DecodeUTF16(player->name, wname, 20);
+	return BufferIO::EncodeUTF8(wname);
+}
+
+// 닉네임에는 따옴표도 역슬래시도 들어갈 수 있다. 그대로 넣으면 JSON 이 깨진다.
+std::string JsonEscape(const std::string& in) {
+	std::string out;
+	out.reserve(in.size() + 8);
+	for(unsigned char c : in) {
+		switch(c) {
+		case '"':  out += "\\\""; break;
+		case '\\': out += "\\\\"; break;
+		case '\n': out += "\\n"; break;
+		case '\r': out += "\\r"; break;
+		case '\t': out += "\\t"; break;
+		default:
+			if(c < 0x20) {
+				char buf[7];
+				snprintf(buf, sizeof(buf), "\\u%04x", c);
+				out += buf;
+			} else {
+				out += static_cast<char>(c);   // UTF-8 바이트는 그대로
+			}
+		}
+	}
+	return out;
+}
+
+// WindBot 은 항상 name="[AI] {이름}" 으로 접속한다 (windbot.cpp).
+// 봇이 낀 판은 통계에 넣지 않는다.
+bool IsBotName(const uint16_t* name) {
+	static const uint16_t prefix[] = { '[', 'A', 'I', ']', ' ' };
+	for(size_t i = 0; i < sizeof(prefix) / sizeof(prefix[0]); ++i) {
+		if(name[i] != prefix[i])
+			return false;
+	}
+	return true;
+}
+
 void AppendCardArray(std::ostringstream& out, const char* key,
                      const Deck::Vector& cards) {
 	out << '"' << key << "\":[";
@@ -125,7 +172,15 @@ void AppendCardArray(std::ostringstream& out, const char* key,
 		const int winner = match_result.back();
 		std::vector<const duelist*> seats;
 		IteratePlayers([&seats](duelist& d) { seats.push_back(&d); });
-		if(seats.size() == 2) {
+
+		// 봇 대전은 보내지 않는다
+		bool has_bot = false;
+		for(const auto* d : seats) {
+			if(d->player && IsBotName(d->player->name))
+				has_bot = true;
+		}
+
+		if(seats.size() == 2 && !has_bot) {
 			std::ostringstream js;
 			js << '{'
 			   << "\"duel_id\":\"" << stat_duel_id << "\","
@@ -140,7 +195,9 @@ void AppendCardArray(std::ostringstream& out, const char* key,
 			for(size_t i = 0; i < seats.size(); ++i) {
 				const Deck& deck = seats[i]->pdeck;
 				if(i) js << ',';
-				js << "{\"seat\":" << i << ",\"deck\":{";
+				js << "{\"seat\":" << i
+				   << ",\"name\":\"" << JsonEscape(PlayerName(seats[i]->player)) << "\""
+				   << ",\"deck\":{";
 				AppendCardArray(js, "main", deck.main);
 				js << ',';
 				AppendCardArray(js, "extra", deck.extra);
@@ -154,20 +211,46 @@ void AppendCardArray(std::ostringstream& out, const char* key,
 	}
 ```
 
+## 봇 대전은 집계되지 않는다
+
+WindBot 은 호스트가 띄운 뒤 **네트워크 클라이언트로 접속**하므로, 사람끼리의
+방과 똑같이 `GenericDuel` 을 탄다. 아무 조치도 하지 않으면 봇 대전이 그대로
+통계에 섞인다.
+
+`DuelPlayer` 에는 봇 표시가 없고, 봇 프로세스 추적(`windbotsPids`)은
+Linux / macOS 에서만 존재한다. 실질적으로 쓸 수 있는 신호는 **이름 접두사**다.
+WindBot 은 `windbot.cpp` 에서 항상 `name="[AI] {이름}"` 으로 실행된다.
+
+위 코드의 `IsBotName()` 이 그걸 검사해, 한쪽이라도 봇이면 보내지 않는다.
+
+사람이 자기 이름을 `[AI] ` 로 시작하게 지으면 그 판도 빠진다. 기록이 덜 쌓일
+뿐 통계가 오염되지는 않으므로, 틀릴 거면 이쪽으로 틀리는 게 맞다.
+
+솔로 모드(`single_mode.cpp`)는 `GenericDuel` 을 쓰지 않으므로 애초에 해당이 없다.
+
 ## 플레이어 이름
 
-위 코드는 **이름을 보내지 않는다.** 통계에는 필요 없고, 보내지 않으면 개인정보를
-다룰 일도 없다.
+닉네임을 함께 보낸다. 관리 화면에서 장난친 기록을 가려내려면 이름이 있어야
+쓸 만하다.
 
-관리 화면에서 "이건 누가 장난친 기록이다" 를 가려내려면 이름이 있는 편이
-편하다. 넣으려면 `"seat"` 다음에 한 줄 더한다.
+**공개 통계에는 절대 나가지 않는다.** `/stats/cards` 와 `/stats/summary` 는
+이름을 반환하지 않고, 관리자 토큰이 있는 `/admin/duels` 에서만 보인다.
 
-```cpp
-				js << ",\"name\":\"" << seats[i]->player->name << "\"";
-```
+### 이름을 그대로 넣으면 안 되는 이유
 
-이름에 따옴표나 역슬래시가 들어갈 수 있으니, 넣을 거면 escape 를 한 번 거쳐야
-한다. 없이 가는 쪽을 권한다.
+`DuelPlayer::name` 은 `uint16_t[20]` 인 UTF-16 배열이다. 두 가지를 거쳐야 한다.
+
+1. **UTF-8 변환** — `DecodeUTF16` 으로 `wchar_t` 로 바꾼 뒤 `EncodeUTF8` 로 넘긴다.
+   `wchar_t` 는 Windows 에서 16비트, Linux 에서 32비트라 직접 캐스팅하면 깨진다.
+2. **JSON 이스케이프** — 닉네임에 `"` 나 `\` 가 들어가면 본문이 통째로 망가져
+   서버가 400 을 돌려준다. 제어문자도 마찬가지다.
+
+위 `PlayerName()` 과 `JsonEscape()` 가 그 두 가지를 한다.
+
+## curl 초기화는 이미 돼 있다
+
+`gframe.cpp` 가 시작할 때 `curl_global_init(CURL_GLOBAL_SSL)` 을 부르므로,
+스레드 안에서 `curl_easy_init()` 을 바로 써도 된다. 따로 초기화할 필요 없다.
 
 ## 확인
 

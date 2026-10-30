@@ -31,11 +31,58 @@ CyanPro 호스트 ──POST /duels──> Cloudflare Worker ──> D1
 
 | 테이블 | 내용 |
 | --- | --- |
-| `duels` | 듀얼 한 건. 승자, 포맷, 시각, 숨김 여부 |
+| `duels` | 듀얼 한 건. 승자, 포맷, 시각, 숨김 여부, 출처(`human`/`sim`) |
 | `duel_players` | 자리별 플레이어와 승패. **이름은 공개 통계에 나가지 않는다** |
 | `deck_cards` | (듀얼, 자리, 존, 카드) 별 매수 |
+| `card_usage` | 카드별 기회·선택 횟수. 시뮬레이션에서만 채워진다 |
 
 무승부는 `winner = 2` 로 저장하고, 승률 분모에서 빠진다.
+
+## 사람 대전과 시뮬레이션
+
+`source` 로 구분해 저장하고, 통계 조회의 기본값은 `human` 이다. 시뮬레이션이
+사람 통계를 덮지 않으면서 같은 화면에서 나란히 비교할 수 있다.
+
+```
+GET /stats/cards?source=human   (기본)
+GET /stats/cards?source=sim
+GET /stats/cards?source=all
+```
+
+시뮬레이션은 `card_usage` 에 **엔진이 합법적 선택지로 제시한 횟수(`offered`)와
+AI 가 실제로 고른 횟수(`taken`)** 를 보낸다.
+
+드로우를 분모로 쓰면 안 된다. 현대 유희왕은 서치·덤핑·덱 특수소환으로 꺼내
+쓰는 비율이 훨씬 높아 드로우는 접근 경로의 일부일 뿐이고, 명칭 턴 제한 때문에
+발동 횟수 자체에도 변별력이 없다.
+
+```
+offered 0                → 기회가 없었음 (루트 미성립 / 서치 실패)
+offered 200 / taken   3  → AI 가 쓸 줄 모름. 그 카드 승률은 근거가 못 됨
+offered 200 / taken 190  → 이해함. 승률 참고 가능
+```
+
+`offered 0` 이 따로 보이는 게 중요하다. "안 쓴 것" 과 "쓸 기회가 없던 것" 은
+원인이 다르다 — 전자는 AI 로직, 후자는 서치 루트나 덱 구성 문제다.
+
+전개 루트로 엮인 카드들은 선택률이 서로 같게 나온다. 어느 파츠가 중요한지는
+이 지표로 알 수 없고, **그 카드를 빼고 같은 덱을 돌리는 A/B** 로만 답할 수 있다.
+
+판수를 늘리면 분산은 줄지만 편향은 그대로다. AI 가 못 쓰는 카드는 1만 판을
+돌려도 계속 약하게 나오고, 신뢰구간만 좁아져 틀린 숫자에 확신이 붙는다.
+선택률은 그걸 가려내기 위한 장치다.
+
+보내는 형식은 이렇다.
+
+```json
+{
+  "source": "sim",
+  "players": [
+    { "seat": 0, "deck": { "main": [...], "extra": [...] },
+      "usage": [ { "card_id": 130000000, "offered": 40, "taken": 38 } ] }
+  ]
+}
+```
 
 ## 들어오는 보고를 거르는 기준
 
@@ -75,6 +122,18 @@ wrangler d1 create cyanpro-stats
 
 ```bash
 wrangler d1 execute cyanpro-stats --remote --file=schema.sql
+```
+
+이미 전에 스키마를 적용했다면 추가분만 넣는다.
+
+```bash
+wrangler d1 execute cyanpro-stats --remote --file=migrations/001_source_and_usage.sql
+```
+
+001 까지 이미 실행했다면 002 도 실행한다 (드로우 분모 → 기회 분모).
+
+```bash
+wrangler d1 execute cyanpro-stats --remote --file=migrations/002_offered_taken.sql
 ```
 
 ## 4. 관리자 토큰 설정
