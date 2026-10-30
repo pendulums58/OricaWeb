@@ -1,0 +1,13 @@
+name = "cyanpro-stats"
+main = "worker.js"
+compatibility_date = "2026-01-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "cyanpro-stats"
+# wrangler d1 create cyanpro-stats 를 실행하면 나오는 id 를 여기에 적는다
+database_id = "여기에-d1-데이터베이스-id"
+
+[vars]
+# 통계를 읽어갈 사이트 주소. 다른 출처에서는 쓰기가 거부된다.
+ALLOWED_ORIGIN = "https://pendulums58.github.io"

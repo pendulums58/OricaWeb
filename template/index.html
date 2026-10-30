@@ -204,8 +204,6 @@ dialog::backdrop{background:rgba(4,10,14,.62)}
   background:var(--surface);color:var(--fg-dim)}
 .fchip[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
 .fchip .dot{display:inline-block;width:7px;height:7px;border-radius:2px;background:var(--sw);margin-right:6px;vertical-align:1px}
-.nopack{opacity:.72}
-.nopack .no{color:var(--fg-faint);font-style:italic}
 
 .warnbox{border:1px solid var(--warnline,#d98f2a);background:color-mix(in srgb,#d98f2a 10%,transparent);
   border-radius:11px;padding:13px 15px;margin-bottom:20px}
@@ -254,6 +252,19 @@ table.sheet td.who.none{font-weight:400;color:var(--fg-faint);font-style:italic}
 .secthead{display:flex;align-items:baseline;gap:10px;margin:0 0 10px}
 .secthead h3{margin:0;font-size:14px;font-weight:700}
 .secthead span{font-family:var(--font-mono);font-size:11px;color:var(--fg-faint)}
+.statbar{display:flex;align-items:center;gap:8px;min-width:132px}
+.statbar .track{flex:1;height:6px;border-radius:3px;background:var(--surface-3);overflow:hidden;min-width:56px}
+.statbar .track i{display:block;height:100%;border-radius:3px;background:var(--accent)}
+.statbar .pct{font-family:var(--font-mono);font-size:11px;color:var(--fg-dim);
+  font-variant-numeric:tabular-nums;white-space:nowrap}
+.wr{font-family:var(--font-mono);font-size:12px;font-variant-numeric:tabular-nums;white-space:nowrap}
+.wr .ci{color:var(--fg-faint);font-size:10.5px;margin-left:5px}
+.wr.thin{color:var(--fg-faint)}
+.thinflag{font-size:10px;color:var(--warn,#b4751a);border:1px solid currentColor;
+  border-radius:999px;padding:1px 6px;margin-left:6px;white-space:nowrap}
+.statname{display:flex;align-items:center;gap:7px;min-width:0}
+.statname .pip{flex:0 0 auto}
+.statname b{font-weight:600;font-size:12.5px;overflow-wrap:anywhere}
 .constgroup{margin-bottom:22px}
 .constgroup h3{margin:0 0 8px;font-size:12px;font-weight:600;letter-spacing:.07em;color:var(--accent)}
 .consttable{width:100%;border-collapse:collapse;font-size:12px}
@@ -325,6 +336,7 @@ let packs = [];
 let allCards = [];
 let constants = { groups: [], drift: [], custom: [], source: null };
 let allocations = { ranges: [], setcodes: [], issues: [], rules: {} };
+let stats = null;   // null = 끄거나 아직 못 받음
 let openState = null;
 let icons = {};
 const cache = new Map();
@@ -558,6 +570,8 @@ const TABS = [
   { id: "constants", label: "코드 일람",
     count: () => constants.groups.reduce((a, g) => a + g.entries.length, 0) },
   { id: "alloc", label: "할당 현황", count: () => allocations.ranges.length },
+  { id: "stats", label: "대전 통계", count: () => stats ? stats.total_duels : 0,
+    hidden: () => !CONFIG || !CONFIG.statsApi },
 ];
 
 function renderTabs() {
@@ -565,6 +579,7 @@ function renderTabs() {
   host.textContent = "";
   const active = currentTab();
   for (const t of TABS) {
+    if (t.hidden && t.hidden()) continue;
     const a = el("a", "tab");
     a.href = "#" + t.id;
     a.append(document.createTextNode(t.label));
@@ -578,7 +593,7 @@ function renderTabs() {
 function currentTab() {
   const h = decodeURIComponent(location.hash.replace(/^#/, ""));
   if (!h) return "cards";
-  if (["packs", "constants", "cards", "alloc"].includes(h)) return h;
+  if (["packs", "constants", "cards", "alloc", "stats"].includes(h)) return h;
   return "packs";   // #RS01 같은 팩 코드
 }
 
@@ -659,8 +674,8 @@ function cardCell(c) {
   b.append(pic);
 
   const cap = el("div", "cap");
-  if (!c.number) b.classList.add("nopack");
-  cap.append(el("span", "no", c.number || "미수록"), el("span", "nm", c.name));
+  if (c.number) cap.append(el("span", "no", c.number));
+  cap.append(el("span", "nm", c.name));
   const ft = el("div", "ft");
   ft.append(el("span", "pip"));
   let tail = c.types.find(t => SUMMON_TYPES.includes(t))
@@ -704,7 +719,8 @@ function paintCard() {
     box.append(im); head.append(box);
   }
   const info = el("div", "dinfo");
-  info.append(el("div", "dnum", card.number || "팩 미수록"), el("h3", null, face.name));
+  if (card.number) info.append(el("div", "dnum", card.number));
+  info.append(el("h3", null, face.name));
 
   if (card.back) {
     const row = el("div", "drow");
@@ -794,6 +810,7 @@ function route() {
   if (h === "packs") renderList();
   else if (h === "constants") renderConstants();
   else if (h === "alloc") renderAlloc();
+  else if (h === "stats") renderStats();
   else if (h === "" || h === "cards") renderAllCards();
   else renderPack(h);
   window.scrollTo(0, 0);
@@ -861,6 +878,196 @@ function renderAllCards() {
   filter.addEventListener("input", () => draw(filter.value));
   view.append(ul);
   draw("");
+}
+
+/* ---------- 대전 통계 ---------- */
+
+/* 윌슨 점수 구간 — 표본이 적을 때 단순 승률이 과장되는 걸 막는다 */
+function wilson(wins, n, z = 1.96) {
+  if (!n) return null;
+  const p = wins / n, z2 = z * z;
+  const denom = 1 + z2 / n;
+  const centre = p + z2 / (2 * n);
+  const spread = z * Math.sqrt((p * (1 - p) + z2 / (4 * n)) / n);
+  return { p, lo: Math.max(0, (centre - spread) / denom),
+           hi: Math.min(1, (centre + spread) / denom) };
+}
+
+const MIN_SAMPLE = 20;   // 이보다 적으면 승률을 흐리게 보여준다
+
+async function loadStats(force) {
+  if (!CONFIG || !CONFIG.statsApi) return null;
+  if (stats && !force) return stats;
+  const base = CONFIG.statsApi.replace(/\/$/, "");
+  const [cards, sum] = await Promise.all([
+    grabJson(`${base}/stats/cards`, null),
+    grabJson(`${base}/stats/summary`, null),
+  ]);
+  if (!cards) return null;
+  stats = {
+    total_decks: cards.total_decks || 0,
+    total_duels: (sum && sum.duels) || 0,
+    first_at: sum && sum.first_at,
+    last_at: sum && sum.last_at,
+    byId: new Map((cards.cards || []).map(c => [c.id, c])),
+  };
+  return stats;
+}
+
+async function renderStats() {
+  document.title = "대전 통계 — CyanPro Card Database";
+  view.textContent = "";
+
+  const head = el("div", "pagehead");
+  head.append(el("h2", null, "대전 통계"));
+  const sub = el("p", null, "불러오는 중…");
+  head.append(sub);
+  view.append(head);
+
+  let data;
+  try { data = await loadStats(true); }
+  catch { data = null; }
+
+  if (!data) {
+    sub.textContent = "통계 서버에 연결하지 못했다.";
+    view.append(el("p", "empty", "config.json 의 statsApi 주소를 확인해라."));
+    return;
+  }
+  renderTabs();
+
+  sub.textContent = `듀얼 ${data.total_duels}판 · 덱 ${data.total_decks}개에서 집계했다.`
+    + (data.total_decks < MIN_SAMPLE * 2
+       ? " 아직 표본이 적어 승률은 참고만 해라." : "");
+
+  if (!data.total_decks) {
+    view.append(el("p", "empty", "아직 기록된 듀얼이 없다."));
+    return;
+  }
+
+  const bar = el("div", "toolbar");
+  const filter = el("input", "filter");
+  filter.type = "search";
+  filter.placeholder = "카드명 검색";
+  bar.append(filter);
+
+  const sortSel = document.createElement("select");
+  sortSel.className = "abtn";
+  for (const [v, label] of [["decks", "채용 많은 순"], ["rate", "채용률 순"],
+                            ["win", "승률 순"], ["name", "이름순"]]) {
+    const o = document.createElement("option");
+    o.value = v; o.textContent = label;
+    sortSel.append(o);
+  }
+  bar.append(sortSel);
+  view.append(bar);
+
+  const wrap = el("div", "sheetwrap");
+  const table = el("table", "sheet");
+  const thead = document.createElement("thead");
+  const hr = document.createElement("tr");
+  for (const h of ["카드", "번호", "채용률", "채용 덱", "평균 매수", "승률"])
+    hr.append(el("th", null, h));
+  thead.append(hr);
+  table.append(thead);
+  const tbody = document.createElement("tbody");
+  table.append(tbody);
+  wrap.append(table);
+  view.append(wrap);
+
+  const draw = () => {
+    tbody.textContent = "";
+    const q = filter.value.trim().toLowerCase();
+    const rows = [];
+    for (const [id, st] of data.byId) {
+      const card = byId.get(id);
+      const name = card ? card.name : `#${id}`;
+      if (q && !name.toLowerCase().includes(q) && !String(id).includes(q)) continue;
+      const decided = st.decided == null ? st.decks : st.decided;
+      rows.push({ id, card, name, st, decided, w: wilson(st.wins, decided) });
+    }
+    const mode = sortSel.value;
+    rows.sort((a, b) => {
+      if (mode === "name") return a.name.localeCompare(b.name, "ko");
+      if (mode === "win") {
+        const aw = a.decided >= MIN_SAMPLE && a.w ? a.w.lo : -1;
+        const bw = b.decided >= MIN_SAMPLE && b.w ? b.w.lo : -1;
+        return bw - aw;
+      }
+      return b.st.decks - a.st.decks;
+    });
+
+    if (!rows.length) {
+      const tr = document.createElement("tr");
+      const td = el("td", null, "조건에 맞는 카드가 없다.");
+      td.colSpan = 6;
+      td.style.cssText = "color:var(--fg-faint);padding:22px 12px;text-align:center";
+      tr.append(td); tbody.append(tr);
+      return;
+    }
+
+    for (const r of rows) {
+      const tr = document.createElement("tr");
+
+      const nameTd = document.createElement("td");
+      const holder = el("div", "statname");
+      const pip = el("span", "pip");
+      if (r.card) pip.style.setProperty("--fc", frameVar(r.card));
+      holder.append(pip, el("b", null, r.name));
+      nameTd.append(holder);
+      if (r.card) {
+        nameTd.style.cursor = "pointer";
+        nameTd.addEventListener("click", () => openCard(r.card));
+      }
+      tr.append(nameTd);
+
+      tr.append(el("td", "id", r.card && r.card.number ? r.card.number : "—"));
+
+      const rate = data.total_decks ? r.st.decks / data.total_decks : 0;
+      const rateTd = document.createElement("td");
+      const sb = el("div", "statbar");
+      const track = el("div", "track");
+      const fill = el("i");
+      fill.style.width = Math.max(rate * 100, r.st.decks ? 2 : 0) + "%";
+      track.append(fill);
+      sb.append(track, el("span", "pct", (rate * 100).toFixed(1) + "%"));
+      rateTd.append(sb);
+      tr.append(rateTd);
+
+      tr.append(el("td", "num", String(r.st.decks)));
+      tr.append(el("td", "num", (r.st.copies / r.st.decks).toFixed(2)));
+
+      const wrTd = document.createElement("td");
+      if (!r.w || !r.decided) {
+        wrTd.append(el("span", "wr thin", "—"));
+      } else {
+        const thin = r.decided < MIN_SAMPLE;
+        const box = el("span", "wr" + (thin ? " thin" : ""));
+        box.append(document.createTextNode((r.w.p * 100).toFixed(1) + "%"));
+        box.append(el("span", "ci",
+          `${(r.w.lo * 100).toFixed(0)}–${(r.w.hi * 100).toFixed(0)}`));
+        wrTd.append(box);
+        if (thin) {
+          const f = el("span", "thinflag", `n=${r.decided}`);
+          f.title = `표본이 ${MIN_SAMPLE}개 미만이라 숫자를 믿기 어렵다`;
+          wrTd.append(f);
+        }
+      }
+      tr.append(wrTd);
+      tbody.append(tr);
+    }
+  };
+
+  filter.addEventListener("input", draw);
+  sortSel.addEventListener("change", draw);
+  draw();
+
+  const note = el("p", "hint");
+  note.style.cssText = "margin-top:14px;font-size:11.5px;color:var(--fg-faint);line-height:1.7";
+  note.textContent =
+    "승률 옆 작은 숫자는 95% 신뢰구간이다. 구간이 넓으면 아직 판단하기 이르다는 뜻이다. "
+    + "강한 덱에 들어간 카드는 그 카드가 강해서가 아니라 덱이 강해서 승률이 높게 나올 수 있으니, "
+    + "채용률과 같이 보는 편이 낫다. 무승부는 승률 분모에서 빠진다.";
+  view.append(note);
 }
 
 /* ---------- 할당 현황 ---------- */
