@@ -15,5 +15,5 @@
   "picsDir": "pics",
   "sqlJs": "https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.2/",
   "statsApi": "",
-  "_statsApi": "Cloudflare Worker 주소. 비워 두면 통계 탭이 나오지 않는다. 예: https://cyanpro-stats.xxx.workers.dev"
+  "_statsApi": "https://cyanpro-stats.cyanpro.workers.dev"
 }

@@ -6,7 +6,7 @@ compatibility_date = "2026-01-01"
 binding = "DB"
 database_name = "cyanpro-stats"
 # wrangler d1 create cyanpro-stats 를 실행하면 나오는 id 를 여기에 적는다
-database_id = "여기에-d1-데이터베이스-id"
+database_id = "2c713194-125d-4d2e-883b-3ff3e95b1c00"
 
 [vars]
 # 통계를 읽어갈 사이트 주소. 다른 출처에서는 쓰기가 거부된다.
