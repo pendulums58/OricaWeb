@@ -30,13 +30,22 @@
       "purpose": "스카이워커",
       "note": "",
       "status": "active"
-    }		
+    },
+    {
+      "from": 140002000,
+      "to": 140002999,
+      "owner": "마루이후루",
+      "purpose": "벨루티나",
+      "note": "",
+      "status": "active"
+    }	
   ],
   "setcodes": [
     { "code": "0x300", "name": "마칭 파이어", "owner": "키로스타스", "note": "" },
     { "code": "0x301", "name": "도와줘", "owner": "이피", "note": "" },
     { "code": "0x302", "name": "스카이워커", "owner": "시안색새벽", "note": "" },
     { "code": "0x303", "name": "관리자", "owner": "시안색새벽", "note": "" },
-	{ "code": "0x304", "name": "LRM(레벨 레볼루션 매직)", "owner": "시안색새벽", "note": "" }
+	{ "code": "0x304", "name": "LRM(레벨 레볼루션 매직)", "owner": "시안색새벽", "note": "" },
+	{ "code": "0x305", "name": "벨루티나", "owner": "마루이후루", "note": "" }
   ]
 }
