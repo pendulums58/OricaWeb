@@ -38,6 +38,14 @@
       "purpose": "벨루티나",
       "note": "",
       "status": "active"
+    },
+    {
+      "from": 140003000,
+      "to": 140003999,
+      "owner": "마루이후루",
+      "purpose": "벨루티나",
+      "note": "",
+      "status": "active"
     }	
   ],
   "setcodes": [
