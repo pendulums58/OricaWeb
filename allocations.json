@@ -16,6 +16,14 @@
       "status": "active"
     },
     {
+      "from": 130100000,
+      "to": 130199999,
+      "owner": "시안색새벽",
+      "purpose": "블루밍 플라워즈",
+      "note": "BF 카드팩 전용 코드",
+      "status": "active"
+    },
+    {
       "from": 140000000,
       "to": 140000999,
       "owner": "키로스타스",
@@ -46,7 +54,15 @@
       "purpose": "도와줘",
       "note": "",
       "status": "active"
-    }	
+    },
+    {
+      "from": 140004000,
+      "to": 140004999,
+      "owner": "녹황",
+      "purpose": "프레자일",
+      "note": "",
+      "status": "active"
+    }		
   ],
   "setcodes": [
     { "code": "0x300", "name": "마칭 파이어", "owner": "키로스타스", "note": "" },
@@ -54,6 +70,7 @@
     { "code": "0x302", "name": "스카이워커", "owner": "시안색새벽", "note": "" },
     { "code": "0x303", "name": "관리자", "owner": "시안색새벽", "note": "" },
 	{ "code": "0x304", "name": "LRM(레벨 레볼루션 매직)", "owner": "시안색새벽", "note": "" },
-	{ "code": "0x305", "name": "벨루티나", "owner": "마루이후루", "note": "" }
+	{ "code": "0x305", "name": "벨루티나", "owner": "마루이후루", "note": "" },
+	{ "code": "0x306", "name": "프레자일", "owner": "녹황", "note": "" }
   ]
 }
