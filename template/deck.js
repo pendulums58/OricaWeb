@@ -335,7 +335,16 @@
   /* ---------- 그리기 ---------- */
 
   let host = null;
-  let poolGridEl = null, poolMetaEl = null;
+  let poolGridEl = null, poolMetaEl = null, poolEl = null;
+
+  /* 풀을 화면에 붙박아 두려면 sticky 기준점이 머리글 높이여야 한다.
+     높이는 글꼴과 줄바꿈에 따라 달라지므로 재서 쓴다. */
+  function fitPool() {
+    if (!poolEl) return;
+    const top = document.querySelector("header.top");
+    const h = top ? Math.round(top.getBoundingClientRect().height) : 96;
+    poolEl.style.setProperty("--topoff", h + "px");
+  }
 
   function render(view, context) {
     ctx = context;
@@ -357,15 +366,28 @@
     if (ctx.loadStats && !(ctx.getStats && ctx.getStats())) {
       ctx.loadStats().then(s => { if (s && host === view) paint(); }).catch(() => {});
     }
+
+    if (!resizeHooked) {
+      resizeHooked = true;
+      window.addEventListener("resize", fitPool);
+    }
   }
+  let resizeHooked = false;
 
   function paint() {
     if (!host) return;
     const keepQuery = document.activeElement && document.activeElement.id === "deckSearch";
     const caret = keepQuery ? document.activeElement.selectionStart : null;
+    // 카드를 넣을 때마다 풀이 맨 위로 튀면 못 쓴다
+    const scrollWas = poolGridEl ? poolGridEl.scrollTop : 0;
 
     host.textContent = "";
-    host.append(headBlock(), deckBlock(), poolBlock());
+    // 가운데가 덱, 오른쪽이 따로 스크롤되는 카드 풀이다
+    const work = el("div", "dkwork");
+    work.append(deckBlock(), poolBlock());
+    host.append(headBlock(), work);
+    fitPool();
+    if (poolGridEl && scrollWas) poolGridEl.scrollTop = scrollWas;
 
     if (keepQuery) {
       const f = document.getElementById("deckSearch");
@@ -535,6 +557,7 @@
   /* 카드 풀 */
   function poolBlock() {
     const wrap = el("section", "dkpool");
+    poolEl = wrap;
     wrap.append(el("h3", null, "카드 풀"));
 
     const bar = el("div", "toolbar");
