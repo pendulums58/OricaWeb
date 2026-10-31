@@ -21,7 +21,11 @@ SITE_FILES = [
     "types.extra.json",
     "packs.meta.json",
     "allocations.json",
+    "lflist.json",
 ]
+
+# template/ 에서 dist/ 루트로 그대로 옮기는 파일들
+TEMPLATE_FILES = ["index.html", "decode.js", "deck.js"]
 
 ICON_SLOTS = [
     "attr-earth", "attr-water", "attr-fire", "attr-wind",
@@ -48,10 +52,12 @@ def main():
     warnings = []
 
     # ---- 사이트 파일 ----
-    shutil.copy2(os.path.join(HERE, "template", "index.html"),
-                 os.path.join(DIST, "index.html"))
-    shutil.copy2(os.path.join(HERE, "template", "decode.js"),
-                 os.path.join(DIST, "decode.js"))
+    for name in TEMPLATE_FILES:
+        src = os.path.join(HERE, "template", name)
+        if os.path.exists(src):
+            shutil.copy2(src, os.path.join(DIST, name))
+        else:
+            warnings.append(f"template/{name} 이 없다")
     for name in SITE_FILES:
         src = os.path.join(HERE, name)
         if os.path.exists(src):

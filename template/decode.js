@@ -26,6 +26,10 @@
   let KNOWN_TYPE_MASK = 0;
   for (const [bit] of TYPE_BITS) KNOWN_TYPE_MASK |= bit;
 
+  // 공식 엑스트라 덱 4종. 펜듈럼은 메인 덱에 넣으므로 여기 없다.
+  // 오리카 자체 타입의 메인 / 엑스트라 지정은 types.extra.json 의 deck 필드가 맡는다.
+  const EXTRA_TYPE_MASK = 0x40 | 0x2000 | 0x800000 | 0x4000000;
+
   const FRAME_ORDER = ["access", "pairing", "gift", "key", "hijack", "link",
                        "xyz", "synchro", "fusion", "ritual", "spell", "trap",
                        "effect", "normal"];
@@ -125,6 +129,12 @@
     }
     const frame = FRAME_ORDER.find(f => frames.includes(f)) || "effect";
 
+    // 어느 덱에 넣는 카드인가. 자체 타입의 deck 지정이 공식 비트보다 우선한다
+    let deckZone = (typeValue & EXTRA_TYPE_MASK) ? "extra" : "main";
+    for (const [bit, spec] of customBits) {
+      if ((typeValue & bit) && spec.deck) deckZone = spec.deck;
+    }
+
     const isLink = !!(typeValue & 0x4000000);
     const isMonster = !!(typeValue & 0x1);
     const levelValue = row.level || 0;
@@ -135,6 +145,7 @@
       text: body,
       types: labels,
       frame,
+      deck: deckZone,
       source,
     };
     if (parsed.number) { card.number = parsed.number; card.seq = parsed.seq; card.packCode = parsed.code; }
@@ -185,7 +196,8 @@
       const spec = typeof raw === "string" ? { name: raw } : (raw || {});
       const name = String(spec.name || "").trim();
       if (!name) continue;
-      customBits.push([parseInt(key, 16) >>> 0, { name, frame: spec.frame || null }]);
+      const deck = spec.deck === "main" || spec.deck === "extra" ? spec.deck : null;
+      customBits.push([parseInt(key, 16) >>> 0, { name, frame: spec.frame || null, deck }]);
     }
 
     const seen = new Map();
@@ -204,12 +216,15 @@
 
     const nameOf = new Map(rows.map(r => [r.id, r.name]));
 
-    /* 같은 그림 묶음 */
+    /* 같은 그림 묶음. familyOf 는 "같은 명칭" 의 대표 ID —
+       덱에서 3장 제한과 금제를 세는 단위다. 일러스트가 달라도 같은 카드다. */
     const family = new Map();
+    const familyOf = new Map();
     for (const r of rows) {
       if (r.type & TYPE_UNLOCKED) continue;
       let base = r.alias || r.id;
       if (r.alias && Math.abs(r.id - r.alias) > ART_SPAN) base = r.id;
+      familyOf.set(r.id, base);
       if (!family.has(base)) family.set(base, []);
       family.get(base).push(r.id);
     }
@@ -236,6 +251,7 @@
 
       const group = artsOf.get(r.id);
       if (group) card.arts = group.map(i => ({ id: i, name: nameOf.get(i) || "" }));
+      card.family = familyOf.get(r.id) || r.id;
 
       allCards.push(card);
 
@@ -283,7 +299,7 @@
       warnings.push("정의되지 않은 종족 비트: " + parts);
     }
 
-    return { allCards, packs: packIndex, warnings, usedIds: [...seen.keys()].sort((a, b) => a - b), nameOf, rows };
+    return { allCards, packs: packIndex, warnings, usedIds: [...seen.keys()].sort((a, b) => a - b), nameOf, familyOf, rows };
   }
 
   /* 할당표를 실제 카드와 대조 */
@@ -451,8 +467,48 @@
     return out;
   }
 
+  /* 금제를 읽는다. lflist.json 객체도, EDOPro 의 lflist.conf 텍스트도 받는다.
+     돌려주는 limits 는 "명칭 대표 ID -> 허용 매수" 다. 목록에 없으면 3장.
+     familyOf 를 주면 일러스트 변형 중 어느 ID 로 적어도 그룹 전체에 걸린다. */
+  function parseLflist(src, familyOf) {
+    const out = { name: null, updated: null, limits: new Map(), issues: [] };
+    const put = (id, n) => {
+      const key = (familyOf && familyOf.get(id)) || id;
+      if (out.limits.has(key) && out.limits.get(key) !== n)
+        out.issues.push(`ID ${id} 의 제한이 같은 명칭의 다른 항목과 어긋난다`);
+      out.limits.set(key, n);
+    };
+
+    if (typeof src === "string") {
+      // EDOPro 형식: "!리스트명" 줄 뒤에 "<id> <매수> -- 주석" 줄이 이어진다
+      for (const raw of src.split(/\r?\n/)) {
+        const line = raw.trim();
+        if (!line || line.startsWith("#")) continue;
+        if (line.startsWith("!")) { if (!out.name) out.name = line.slice(1).trim(); continue; }
+        const m = /^(\d+)\s+(-?\d+)/.exec(line);
+        if (!m) continue;
+        const n = parseInt(m[2], 10);
+        if (n >= 0 && n <= 3) put(parseInt(m[1], 10), n);
+      }
+      return out;
+    }
+
+    const obj = src || {};
+    out.name = obj.name || null;
+    out.updated = obj.updated || null;
+    for (const [key, val] of Object.entries(obj.limits || {})) {
+      const id = parseInt(key, 10);
+      if (!Number.isInteger(id)) { out.issues.push(`금제 항목 "${key}" 가 ID 가 아니다`); continue; }
+      if (!Number.isInteger(val) || val < 0 || val > 3) {
+        out.issues.push(`ID ${id} 의 값 ${JSON.stringify(val)} 가 0~3 이 아니다`); continue;
+      }
+      put(id, val);
+    }
+    return out;
+  }
+
   global.OricaDecode = {
-    buildAll, reconcile, parseConstants, describe, splitDesc, parseMeta,
+    buildAll, reconcile, parseConstants, parseLflist, describe, splitDesc, parseMeta,
     TYPE_UNLOCKED, TYPE_KEY, ART_SPAN,
   };
 })(typeof window !== "undefined" ? window : globalThis);
