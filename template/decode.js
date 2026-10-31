@@ -41,12 +41,11 @@
     [0x8000, "야수전사족"], [0x10000, "공룡족"], [0x20000, "어류족"],
     [0x40000, "해룡족"], [0x80000, "파충류족"], [0x100000, "사이킥족"],
     [0x200000, "환신야수족"], [0x400000, "창조신족"], [0x800000, "환룡족"],
-    [0x1000000, "사이버스족"], [0x2000000, "환상마족"], [0x4000000, "사이보그족"],
-    [0x8000000, "마법기사족"], [0x10000000, "고룡족"], [0x20000000, "오메가사이킥족"],
-    [0x40000000, "천위족"], [0x80000000, "갤럭시족"],
+    [0x1000000, "사이버스족"], [0x2000000, "환상마족"],
+    // 러시 듀얼 전용 6종족(사이보그 0x4000000 ~ 갤럭시 0x80000000)과 코믹스 한정
+    // 요괴족(0x4000000000000000)은 코어 / 프로 클라이언트에서 제거되어 여기서도 뺀다.
+    // 해당 비트는 비어 있으므로 오리카 종족에 재배정할 수 있다.
   ];
-  // 요괴족(0x4000000000000000)은 53비트를 넘어 BigInt 로 따로 본다
-  const RACE_YOKAI = 0x4000000000000000n;
 
   const LINK_MARKERS = [[0x1, "↙"], [0x2, "↓"], [0x4, "↘"], [0x8, "←"],
                         [0x20, "→"], [0x40, "↖"], [0x80, "↑"], [0x100, "↗"]];
@@ -59,11 +58,6 @@
   const one = (value, table) => {
     for (const [bit, label] of table) if ((value >>> 0) & bit) return label;
     return null;
-  };
-
-  const raceName = value => {
-    try { if (BigInt(value) & RACE_YOKAI) return "요괴족"; } catch { /* 무시 */ }
-    return one(Number(value) % 0x100000000, RACES);
   };
 
   /* 효과 설명을 본문과 꼬리의 대괄호 줄로 나눈다 */
@@ -110,7 +104,7 @@
   }
 
   /* 한 행을 카드 객체로 */
-  function describe(row, source, customBits, unknownBits) {
+  function describe(row, source, customBits, unknownBits, unknownRaces) {
     const { body, meta } = splitDesc(row.desc);
     const parsed = parseMeta(meta);
     const typeValue = row.type >>> 0;
@@ -153,6 +147,14 @@
       card.atk = row.atk;
       card.attribute = one(row.attribute, ATTRIBUTES);
       card.race = one(row.race, RACES);
+      if (!card.race && row.race && unknownRaces) {
+        // 러시 / 요괴족을 지운 뒤라 과거에 그 비트를 쓴 카드는 종족이 빈다.
+        // sql.js 가 2^53 을 넘는 값을 비정수 Number 로 주면 BigInt 가 던진다
+        let key;
+        try { key = "0x" + BigInt(row.race).toString(16); }
+        catch { key = String(row.race); }
+        unknownRaces.set(key, (unknownRaces.get(key) || 0) + 1);
+      }
       if (isLink) {
         card.link = levelValue & 0xFF;
         card.markers = bits(row.def || 0, LINK_MARKERS);
@@ -175,6 +177,7 @@
     const aliases = (packMeta._aliases) || {};
     const warnings = [];
     const unknownBits = new Map();
+    const unknownRaces = new Map();
 
     const customBits = [];
     for (const [key, raw] of Object.entries(extraTypes)) {
@@ -222,11 +225,11 @@
 
     for (const r of rows) {
       if (r.type & TYPE_UNLOCKED) continue;
-      const card = describe(r, r.source, customBits, unknownBits);
+      const card = describe(r, r.source, customBits, unknownBits, unknownRaces);
 
       const back = backs.get(r.id);
       if (back) {
-        card.back = describe(back, back.source, customBits, null);
+        card.back = describe(back, back.source, customBits, null, null);
         delete card.back.alias;
       }
       else if (r.type & TYPE_KEY) warnings.push(`키 카드 ${r.name} 의 해방면을 찾지 못했다`);
@@ -274,6 +277,10 @@
     if (unknownBits.size) {
       const parts = [...unknownBits].map(([b, n]) => `${b} (${n}장)`).join(", ");
       warnings.push("정의되지 않은 타입 비트: " + parts);
+    }
+    if (unknownRaces.size) {
+      const parts = [...unknownRaces].map(([b, n]) => `${b} (${n}장)`).join(", ");
+      warnings.push("정의되지 않은 종족 비트: " + parts);
     }
 
     return { allCards, packs: packIndex, warnings, usedIds: [...seen.keys()].sort((a, b) => a - b), nameOf, rows };
