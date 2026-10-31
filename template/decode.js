@@ -56,6 +56,9 @@
 
   const TYPE_UNLOCKED = 0x8000;
   const TYPE_KEY = 0x8;
+  const TYPE_TOKEN = 0x4000;
+  // ot 는 카드가 어느 룰에 속하는지를 담는다. HIDDEN 은 덱에 넣을 수 없다.
+  const SCOPE_HIDDEN = 0x1000;
   const ART_SPAN = 10;
 
   const bits = (value, table) => table.filter(r => value & r[0]).map(r => r[1]);
@@ -146,6 +149,9 @@
       types: labels,
       frame,
       deck: deckZone,
+      // 덱에 넣을 수 있는 카드인가. 엔진의 DeckBuilder::CheckCardProperties 와
+      // 같은 조건이다 (gframe/deck_con.cpp): 토큰, 해방면, 숨김 카드는 못 넣는다.
+      deckable: !(typeValue & (TYPE_TOKEN | TYPE_UNLOCKED)) && !((row.ot || 0) & SCOPE_HIDDEN),
       source,
     };
     if (parsed.number) { card.number = parsed.number; card.seq = parsed.seq; card.packCode = parsed.code; }

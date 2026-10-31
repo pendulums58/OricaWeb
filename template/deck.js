@@ -53,6 +53,8 @@
 
   /* 이 카드를 지금 어느 존에 넣을 수 있나. 넣을 수 없으면 이유를 돌려준다 */
   function placeFor(card) {
+    if (card.deckable === false)
+      return { error: `${card.name} 은 덱에 넣을 수 없는 카드다` };
     const fam = card.family || card.id;
     const allowed = allowedFor(fam);
     if (allowed === 0) return { error: `${card.name} 은 금지 카드다` };
@@ -102,6 +104,14 @@
         errors.push(`${label} 덱에 들어갈 수 없는 카드가 있다: ${names}`);
       }
     }
+
+    // .ydk 나 공유 링크로는 풀 필터를 거치지 않고 들어올 수 있다
+    const banned = [...new Set(zones().flat())]
+      .map(id => ctx.byId.get(id))
+      .filter(c => c && c.deckable === false);
+    if (banned.length)
+      errors.push("덱에 넣을 수 없는 카드가 있다: "
+        + banned.map(c => c.name).join(", "));
 
     const unknown = zones().flat().filter(id => !ctx.byId.get(id));
     if (unknown.length)
@@ -630,6 +640,8 @@
   function poolHits() {
     const q = poolQuery.trim().toLowerCase();
     let hits = ctx.allCards.filter(c => {
+      // 토큰 · 해방면 · 숨김 카드는 덱에 넣을 수 없으므로 검색에도 걸리지 않는다
+      if (c.deckable === false) return false;
       if (poolZone !== "all" && (c.deck === "extra" ? "extra" : "main") !== poolZone) return false;
       if (poolKinds.size && ![...poolKinds].some(k => c.types.includes(k))) return false;
       if (!q) return true;
