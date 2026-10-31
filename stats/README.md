@@ -32,11 +32,48 @@ CyanPro 호스트 ──POST /duels──> Cloudflare Worker ──> D1
 | 테이블 | 내용 |
 | --- | --- |
 | `duels` | 듀얼 한 건. 승자, 포맷, 시각, 숨김 여부, 출처(`human`/`sim`) |
-| `duel_players` | 자리별 플레이어와 승패. **이름은 공개 통계에 나가지 않는다** |
+| `duel_players` | 자리별 플레이어와 승패, 덱 지문, 매치 내 고정 번호. **이름은 공개 통계에 나가지 않는다** |
 | `deck_cards` | (듀얼, 자리, 존, 카드) 별 매수 |
 | `card_usage` | 카드별 기회·선택 횟수. 시뮬레이션에서만 채워진다 |
 
 무승부는 `winner = 2` 로 저장하고, 승률 분모에서 빠진다.
+
+## 같은 덱을 하나로 세기
+
+한 사람이 같은 덱으로 50판을 돌리면 그대로는 덱 50개로 센다. 그래서 두 가지
+분모를 모두 낸다.
+
+| 기준 | 분모 | 답하는 질문 |
+| --- | --- | --- |
+| 판수 | 듀얼마다의 덱 | 실제 대전에서 이 카드가 얼마나 나왔나 |
+| 고유 덱 | 서로 다른 레시피 | 몇 가지 빌드가 이 카드를 넣나 |
+
+작은 커뮤니티에서는 한 명이 갈면 판수 기준이 통째로 왜곡된다. 반대로 고유 덱만
+보면 열 명이 같은 리스트를 돌려도 1로 깎여 환경 점유율을 놓친다. 둘 다 필요하다.
+
+지문은 **메인 + 엑스트라** 구성에서만 뽑는다 (`duel_players.deck_hash`).
+카드 순서는 무시하고 매수는 반영하므로, 같은 레시피면 같은 값이 나온다.
+
+고유 덱 집계는 **`game_no = 1` 인 판만** 센다. 호스트가 보내는 덱은 사이드 교체가
+끝난 상태라, 2선승 매치의 2·3차전을 그대로 세면 한 사람의 한 매치가 덱 세 개가
+되어 버린다. 1차전이 사이드 교체 전 원본이다.
+
+## 덱 레시피별 통계
+
+`GET /stats/decks` 는 레시피마다 매치 승률과 듀얼 승률을 낸다.
+
+**매치 1차전 덱을 그 매치의 정식 레시피로 보고, 2·3차전 결과까지 거기에 귀속시킨다.**
+사이드 교체 때문에 2·3차전은 리스트가 달라 보이지만 같은 덱이다.
+
+사람을 묶는 기준은 `seat` 이 아니라 `player_no` 다. 진 쪽이 선공을 고르면
+`GenericDuel::TPResult()` 가 `players.home` 과 `players.opposing` 을 통째로 바꿔서
+**자리가 매치 중간에 뒤집힌다.** `match_result` 도 같이 뒤집히므로 한 듀얼 안의
+승자 판정은 정확하지만, 매치를 가로지를 때는 쓸 수 없다.
+
+`player_no` 가 없는 기록은 이 집계에서 빠진다.
+
+카드별 승률과 달리 이 숫자는 덱 전체의 성적이라, "강한 덱에 들어 있어서 강해
+보이는" 교란이 없다.
 
 ## 사람 대전과 시뮬레이션
 
@@ -134,6 +171,13 @@ wrangler d1 execute cyanpro-stats --remote --file=migrations/001_source_and_usag
 
 ```bash
 wrangler d1 execute cyanpro-stats --remote --file=migrations/002_offered_taken.sql
+```
+
+덱 지문 컬럼을 추가한다 (스키마를 처음 만드는 경우에는 이미 포함돼 있다).
+
+```bash
+wrangler d1 execute cyanpro-stats --remote --file=migrations/003_deck_hash.sql
+wrangler d1 execute cyanpro-stats --remote --file=migrations/004_player_no.sql
 ```
 
 ## 4. 관리자 토큰 설정

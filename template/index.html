@@ -265,6 +265,15 @@ table.sheet td.who.none{font-weight:400;color:var(--fg-faint);font-style:italic}
 .statname{display:flex;align-items:center;gap:7px;min-width:0}
 .statname .pip{flex:0 0 auto}
 .statname b{font-weight:600;font-size:12.5px;overflow-wrap:anywhere}
+.deckrow .rec{font-family:var(--font-mono);font-size:10.5px;color:var(--fg-faint)}
+.deckbox{background:var(--surface-2);padding:12px 14px}
+.deckbox h4{margin:0 0 7px;font-size:11px;letter-spacing:.05em;color:var(--fg-dim);text-transform:uppercase}
+.deckbox .zone{margin-bottom:11px}
+.deckbox .zone:last-child{margin-bottom:0}
+.decklist{display:flex;flex-wrap:wrap;gap:5px}
+.decklist span{font-size:11px;background:var(--surface);border:1px solid var(--line);
+  border-radius:6px;padding:2px 8px}
+.decklist span b{font-family:var(--font-mono);color:var(--accent);font-weight:600;margin-left:4px}
 .constgroup{margin-bottom:22px}
 .constgroup h3{margin:0 0 8px;font-size:12px;font-weight:600;letter-spacing:.07em;color:var(--accent)}
 .consttable{width:100%;border-collapse:collapse;font-size:12px}
@@ -337,6 +346,7 @@ let allCards = [];
 let constants = { groups: [], drift: [], custom: [], source: null };
 let allocations = { ranges: [], setcodes: [], issues: [], rules: {} };
 let stats = null;   // null = 끄거나 아직 못 받음
+let deckStats = null;
 let openState = null;
 let icons = {};
 const cache = new Map();
@@ -572,6 +582,8 @@ const TABS = [
   { id: "alloc", label: "할당 현황", count: () => allocations.ranges.length },
   { id: "stats", label: "대전 통계", count: () => stats ? stats.total_duels : 0,
     hidden: () => !CONFIG || !CONFIG.statsApi },
+  { id: "decks", label: "덱 통계", count: () => deckStats ? deckStats.length : 0,
+    hidden: () => !CONFIG || !CONFIG.statsApi },
 ];
 
 function renderTabs() {
@@ -593,7 +605,7 @@ function renderTabs() {
 function currentTab() {
   const h = decodeURIComponent(location.hash.replace(/^#/, ""));
   if (!h) return "cards";
-  if (["packs", "constants", "cards", "alloc", "stats"].includes(h)) return h;
+  if (["packs", "constants", "cards", "alloc", "stats", "decks"].includes(h)) return h;
   return "packs";   // #RS01 같은 팩 코드
 }
 
@@ -811,6 +823,7 @@ function route() {
   else if (h === "constants") renderConstants();
   else if (h === "alloc") renderAlloc();
   else if (h === "stats") renderStats();
+  else if (h === "decks") renderDeckStats();
   else if (h === "" || h === "cards") renderAllCards();
   else renderPack(h);
   window.scrollTo(0, 0);
@@ -896,20 +909,24 @@ function wilson(wins, n, z = 1.96) {
 const MIN_SAMPLE = 20;   // 이보다 적으면 승률을 흐리게 보여준다
 
 let statsSource = "human";   // human | sim | all
+let statsBasis = "decks";    // decks(판수) | unique(고유 덱)
+let statsZone = "main";      // main(메인+엑스트라) | all(사이드 포함) | side(사이드만)
 
 async function loadStats(force) {
   if (!CONFIG || !CONFIG.statsApi) return null;
-  if (stats && stats.source === statsSource && !force) return stats;
+  if (stats && stats.source === statsSource && stats.zone === statsZone && !force) return stats;
   const base = CONFIG.statsApi.replace(/\/$/, "");
   const [cards, sum] = await Promise.all([
-    grabJson(`${base}/stats/cards?source=${statsSource}`, null),
+    grabJson(`${base}/stats/cards?source=${statsSource}&zone=${statsZone}`, null),
     grabJson(`${base}/stats/summary`, null),
   ]);
   if (!cards) return null;
   stats = {
     source: statsSource,
+    zone: statsZone,
     by_source: (sum && sum.by_source) || [],
     total_decks: cards.total_decks || 0,
+    unique_decks: cards.unique_decks || 0,
     total_duels: (sum && sum.duels) || 0,
     first_at: sum && sum.first_at,
     last_at: sum && sum.last_at,
@@ -928,25 +945,9 @@ async function renderStats() {
   head.append(sub);
   view.append(head);
 
-  let data;
-  try { data = await loadStats(true); }
-  catch { data = null; }
-
-  if (!data) {
-    sub.textContent = "통계 서버에 연결하지 못했다.";
-    view.append(el("p", "empty", "config.json 의 statsApi 주소를 확인해라."));
-    return;
-  }
-  renderTabs();
-
-  sub.textContent = `듀얼 ${data.total_duels}판 · 덱 ${data.total_decks}개에서 집계했다.`
-    + (data.total_decks < MIN_SAMPLE * 2
-       ? " 아직 표본이 적어 승률은 참고만 해라." : "");
-
-  if (!data.total_decks) {
-    view.append(el("p", "empty", "아직 기록된 듀얼이 없다."));
-    return;
-  }
+  // 툴바는 데이터보다 먼저 그린다. 기록이 없거나 서버에 못 붙어도
+  // 출처를 되돌릴 수단이 사라지면 안 된다.
+  let draw = () => {};
 
   const bar = el("div", "toolbar");
   const filter = el("input", "filter");
@@ -968,6 +969,28 @@ async function renderStats() {
   });
   bar.append(srcSel);
 
+  const zoneSel = document.createElement("select");
+  zoneSel.className = "abtn";
+  for (const [v, label] of [["main", "메인 + 엑스트라"], ["all", "사이드 포함"], ["side", "사이드만"]]) {
+    const o = document.createElement("option");
+    o.value = v; o.textContent = label;
+    if (v === statsZone) o.selected = true;
+    zoneSel.append(o);
+  }
+  zoneSel.addEventListener("change", () => { statsZone = zoneSel.value; renderStats(); });
+  bar.append(zoneSel);
+
+  const basisSel = document.createElement("select");
+  basisSel.className = "abtn";
+  for (const [v, label] of [["decks", "판수 기준"], ["unique", "고유 덱 기준"]]) {
+    const o = document.createElement("option");
+    o.value = v; o.textContent = label;
+    if (v === statsBasis) o.selected = true;
+    basisSel.append(o);
+  }
+  basisSel.addEventListener("change", () => { statsBasis = basisSel.value; draw(); });
+  bar.append(basisSel);
+
   const sortSel = document.createElement("select");
   sortSel.className = "abtn";
   for (const [v, label] of [["decks", "채용 많은 순"], ["rate", "채용률 순"],
@@ -979,12 +1002,37 @@ async function renderStats() {
   bar.append(sortSel);
   view.append(bar);
 
+  let data;
+  try { data = await loadStats(true); }
+  catch { data = null; }
+  renderTabs();
+
+  if (!data) {
+    sub.textContent = "통계 서버에 연결하지 못했다.";
+    view.append(el("p", "empty", "config.json 의 statsApi 주소를 확인해라."));
+    return;
+  }
+
+  sub.textContent = `듀얼 ${data.total_duels}판 · 덱 ${data.total_decks}개`
+    + (data.unique_decks ? ` (서로 다른 레시피 ${data.unique_decks}가지)` : "")
+    + "에서 집계했다."
+    + (data.total_decks < MIN_SAMPLE * 2
+       ? " 아직 표본이 적어 승률은 참고만 해라." : "");
+
+  if (!data.total_decks) {
+    view.append(el("p", "empty",
+      statsSource === "sim" ? "아직 기록된 시뮬레이션이 없다."
+                            : "아직 기록된 듀얼이 없다."));
+    return;
+  }
+
   const wrap = el("div", "sheetwrap");
   const table = el("table", "sheet");
   const thead = document.createElement("thead");
   const hr = document.createElement("tr");
+  const headCells = [];
   for (const h of ["카드", "번호", "채용률", "채용 덱", "평균 매수", "선택률", "승률"])
-    hr.append(el("th", null, h));
+    headCells.push(hr.appendChild(el("th", null, h)));
   thead.append(hr);
   table.append(thead);
   const tbody = document.createElement("tbody");
@@ -992,7 +1040,7 @@ async function renderStats() {
   wrap.append(table);
   view.append(wrap);
 
-  const draw = () => {
+  draw = () => {
     tbody.textContent = "";
     const q = filter.value.trim().toLowerCase();
     const rows = [];
@@ -1011,8 +1059,11 @@ async function renderStats() {
         const bw = b.decided >= MIN_SAMPLE && b.w ? b.w.lo : -1;
         return bw - aw;
       }
+      if (statsBasis === "unique") return (b.st.unique || 0) - (a.st.unique || 0);
       return b.st.decks - a.st.decks;
     });
+
+    headCells[3].textContent = statsBasis === "unique" ? "채용 레시피" : "채용 덱";
 
     if (!rows.length) {
       const tr = document.createElement("tr");
@@ -1040,18 +1091,21 @@ async function renderStats() {
 
       tr.append(el("td", "id", r.card && r.card.number ? r.card.number : "—"));
 
-      const rate = data.total_decks ? r.st.decks / data.total_decks : 0;
+      const byUnique = statsBasis === "unique";
+      const hit = byUnique ? (r.st.unique || 0) : r.st.decks;
+      const base = byUnique ? data.unique_decks : data.total_decks;
+      const rate = base ? hit / base : 0;
       const rateTd = document.createElement("td");
       const sb = el("div", "statbar");
       const track = el("div", "track");
       const fill = el("i");
-      fill.style.width = Math.max(rate * 100, r.st.decks ? 2 : 0) + "%";
+      fill.style.width = Math.max(rate * 100, hit ? 2 : 0) + "%";
       track.append(fill);
       sb.append(track, el("span", "pct", (rate * 100).toFixed(1) + "%"));
       rateTd.append(sb);
       tr.append(rateTd);
 
-      tr.append(el("td", "num", String(r.st.decks)));
+      tr.append(el("td", "num", String(hit)));
       tr.append(el("td", "num", (r.st.copies / r.st.decks).toFixed(2)));
 
       // 분모는 드로우가 아니라 "엔진이 합법적 선택지로 제시한 횟수" 다.
@@ -1098,9 +1152,19 @@ async function renderStats() {
     }
   };
 
-  filter.addEventListener("input", draw);
-  sortSel.addEventListener("change", draw);
+  filter.addEventListener("input", () => draw());
+  sortSel.addEventListener("change", () => draw());
+
   draw();
+
+  if (statsZone !== "main") {
+    const sideNote = el("p", "hint");
+    sideNote.style.cssText = "margin-top:12px;font-size:11.5px;color:var(--fg-faint);line-height:1.7";
+    sideNote.textContent =
+      "호스트가 보내는 덱은 사이드 교체가 끝난 상태다. 매치 2·3차전에서는 사이드로 넘어간 "
+      + "메인 카드가 사이드에 섞여 있으므로, 원래 사이드 덱 구성을 보려면 1차전 기록만 봐야 한다.";
+    view.append(sideNote);
+  }
 
   const note = el("p", "hint");
   note.style.cssText = "margin-top:14px;font-size:11.5px;color:var(--fg-faint);line-height:1.7";
@@ -1114,6 +1178,150 @@ async function renderStats() {
     + "'기회 없음' 은 또 달라서, 루트가 성립하지 않았거나 서치되지 않았다는 뜻이다. "
     + "전개 루트로 엮인 카드들은 선택률이 서로 같게 나오므로, 어느 파츠가 중요한지는 "
     + "그 카드를 빼고 같은 덱을 돌리는 A/B 로만 알 수 있다. 시뮬레이션에서만 기록된다.";
+  view.append(note);
+}
+
+/* ---------- 덱 통계 ---------- */
+let deckSource = "human";
+
+async function renderDeckStats() {
+  document.title = "덱 통계 — CyanPro Card Database";
+  view.textContent = "";
+
+  const head = el("div", "pagehead");
+  head.append(el("h2", null, "덱 통계"));
+  const sub = el("p", null, "불러오는 중…");
+  head.append(sub);
+  view.append(head);
+
+  const bar = el("div", "toolbar");
+  const srcSel = document.createElement("select");
+  srcSel.className = "abtn";
+  for (const [v, label] of [["human", "사람 대전"], ["sim", "시뮬레이션"], ["all", "전체"]]) {
+    const o = document.createElement("option");
+    o.value = v; o.textContent = label;
+    if (v === deckSource) o.selected = true;
+    srcSel.append(o);
+  }
+  srcSel.addEventListener("change", () => { deckSource = srcSel.value; renderDeckStats(); });
+  bar.append(srcSel);
+  view.append(bar);
+
+  let decks = null;
+  if (CONFIG && CONFIG.statsApi) {
+    const base = CONFIG.statsApi.replace(/\/$/, "");
+    const res = await grabJson(`${base}/stats/decks?source=${deckSource}`, null);
+    decks = res && res.decks;
+  }
+  deckStats = decks;
+  renderTabs();
+
+  if (!decks) {
+    sub.textContent = "통계 서버에 연결하지 못했다.";
+    return;
+  }
+  if (!decks.length) {
+    sub.textContent = "아직 집계할 덱이 없다.";
+    view.append(el("p", "empty",
+      "매치가 기록되면 여기 나온다. CyanPro 가 player_no 를 보내야 매치를 묶을 수 있다."));
+    return;
+  }
+
+  sub.textContent = `서로 다른 레시피 ${decks.length}가지. `
+    + "매치 1차전 덱을 그 매치의 레시피로 보고, 사이드 교체한 2·3차전 결과까지 함께 센다.";
+
+  const wrap = el("div", "sheetwrap");
+  const table = el("table", "sheet");
+  const thead = document.createElement("thead");
+  const hr = document.createElement("tr");
+  for (const h of ["레시피", "매치", "매치 승률", "듀얼", "듀얼 승률", "조종자", "구성"])
+    hr.append(el("th", null, h));
+  thead.append(hr);
+  table.append(thead);
+  const tbody = document.createElement("tbody");
+
+  const pct = (w, n) => {
+    if (!n) return el("span", "wr thin", "—");
+    const r = wilson(w, n);
+    const thin = n < MIN_SAMPLE;
+    const box = el("span", "wr" + (thin ? " thin" : ""));
+    box.append(document.createTextNode((r.p * 100).toFixed(0) + "%"));
+    box.append(el("span", "ci", `${(r.lo * 100).toFixed(0)}–${(r.hi * 100).toFixed(0)}`));
+    return box;
+  };
+
+  for (const d of decks) {
+    const tr = document.createElement("tr");
+    tr.className = "deckrow";
+
+    const nameTd = document.createElement("td");
+    const top = (d.deck.main || []).slice()
+      .sort((a, b) => b.qty - a.qty)
+      .map(c => (byId.get(c.id) || {}).name)
+      .filter(Boolean).slice(0, 2).join(" · ");
+    const holder = el("div", "statname");
+    holder.append(el("b", null, top || "구성 없음"));
+    nameTd.append(holder, el("div", "rec", d.hash.slice(0, 10)));
+    tr.append(nameTd);
+
+    tr.append(el("td", "num", String(d.matches)));
+    const mw = document.createElement("td"); mw.append(pct(d.match_wins, d.matches)); tr.append(mw);
+    tr.append(el("td", "num", String(d.duels)));
+    const dw = document.createElement("td"); dw.append(pct(d.duel_wins, d.duels)); tr.append(dw);
+    tr.append(el("td", "num", String(d.pilots || 0)));
+
+    const openTd = document.createElement("td");
+    const total = (d.deck.main || []).reduce((a, c) => a + c.qty, 0);
+    const btn = el("button", null, `${total}장 보기`);
+    btn.style.cssText = "font-size:11.5px;color:var(--accent);text-decoration:underline;padding:0";
+    const sub2 = document.createElement("tr");
+    sub2.className = "subrow"; sub2.hidden = true;
+    const subtd = document.createElement("td");
+    subtd.colSpan = 7;
+    const box = el("div", "deckbox");
+    for (const [zone, label] of [["main", "메인"], ["extra", "엑스트라"], ["side", "사이드"]]) {
+      const list = d.deck[zone] || [];
+      if (!list.length) continue;
+      const sec = el("div", "zone");
+      const n = list.reduce((a, c) => a + c.qty, 0);
+      sec.append(el("h4", null, `${label} ${n}`));
+      const ul = el("div", "decklist");
+      for (const c of list.slice().sort((a, b) => b.qty - a.qty)) {
+        const card = byId.get(c.id);
+        const chip = el("span");
+        chip.append(document.createTextNode(card ? card.name : `#${c.id}`));
+        if (c.qty > 1) chip.append(el("b", null, "×" + c.qty));
+        if (card) {
+          chip.style.cursor = "pointer";
+          chip.addEventListener("click", () => openCard(card));
+        }
+        ul.append(chip);
+      }
+      sec.append(ul);
+      box.append(sec);
+    }
+    subtd.append(box); sub2.append(subtd);
+    let open = false;
+    btn.addEventListener("click", () => {
+      open = !open; sub2.hidden = !open;
+      btn.textContent = open ? "접기" : `${total}장 보기`;
+    });
+    openTd.append(btn);
+    tr.append(openTd);
+
+    tbody.append(tr, sub2);
+  }
+  table.append(tbody);
+  wrap.append(table);
+  view.append(wrap);
+
+  const note = el("p", "hint");
+  note.style.cssText = "margin-top:14px;font-size:11.5px;color:var(--fg-faint);line-height:1.7";
+  note.textContent =
+    "레시피는 메인과 엑스트라 구성으로만 구분한다. 사이드가 달라도 같은 덱으로 본다. "
+    + "자리는 매치 중간에 뒤집히므로 seat 이 아니라 player_no 로 사람을 묶는다. "
+    + "승률 옆 작은 숫자는 95% 신뢰구간이고, 표본이 적으면 흐리게 나온다. "
+    + "카드별 승률과 달리 이 숫자는 덱 전체의 성적이라 '강한 덱에 든 카드' 교란이 없다.";
   view.append(note);
 }
 

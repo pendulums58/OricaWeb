@@ -16,6 +16,11 @@
 	std::string stat_duel_id;     // 이번 듀얼의 시드 (고유 ID)
 	std::string stat_match_id;    // 매치 첫 듀얼의 시드
 	int stat_game_no = 0;         // 매치 내 몇 번째 듀얼인지
+
+	// 매치 안에서 사람을 고정 식별하는 번호.
+	// 진 쪽이 선공을 고르면 TPResult() 가 players.home 과 players.opposing 을
+	// 통째로 바꿔서 seat 이 매치 중간에 뒤집힌다. 포인터는 안 바뀌므로 이걸 쓴다.
+	std::map<const DuelPlayer*, int> stat_player_no;
 ```
 
 ## 2. 듀얼 시작 시 시드 보관 — `generic_duel.cpp`
@@ -49,6 +54,7 @@
 ```cpp
 		stat_match_id.clear();
 		stat_game_no = 0;
+		stat_player_no.clear();
 ```
 
 ## 3. 듀얼이 끝날 때 보내기 — `generic_duel.cpp`
@@ -58,6 +64,7 @@
 ```cpp
 #include <thread>
 #include <sstream>
+#include <map>
 #include "curl.h"
 #include "config.h"        // 버전 매크로
 #include "game_config.h"   // gGameConfig (SSL 인증서 경로)
@@ -194,9 +201,15 @@ void AppendCardArray(std::ostringstream& out, const char* key,
 			   << "\"players\":[";
 			for(size_t i = 0; i < seats.size(); ++i) {
 				const Deck& deck = seats[i]->pdeck;
+				const DuelPlayer* who = seats[i]->player;
+				// 매치 첫 듀얼에 번호를 찍어두고, 자리가 뒤집혀도 그대로 쓴다
+				auto found = stat_player_no.find(who);
+				if(found == stat_player_no.end())
+					found = stat_player_no.emplace(who, (int)stat_player_no.size()).first;
 				if(i) js << ',';
 				js << "{\"seat\":" << i
-				   << ",\"name\":\"" << JsonEscape(PlayerName(seats[i]->player)) << "\""
+				   << ",\"player_no\":" << found->second
+				   << ",\"name\":\"" << JsonEscape(PlayerName(who)) << "\""
 				   << ",\"deck\":{";
 				AppendCardArray(js, "main", deck.main);
 				js << ',';
@@ -210,6 +223,30 @@ void AppendCardArray(std::ostringstream& out, const char* key,
 		}
 	}
 ```
+
+## 자리는 매치 중간에 바뀐다
+
+`TPResult()` 669~682줄에서, **진 쪽이 선공을 고르면** 이런 일이 일어난다.
+
+```cpp
+std::swap(players.opposing, players.home);
+for(auto& val : match_result) val = 1 - val;
+```
+
+`players.home` 과 `players.opposing` 을 통째로 바꾼다. `IteratePlayers` 로 매기는
+`seat` 은 그래서 **매치 중간에 뒤집힌다.** 태그 듀얼 전용이 아니라 매치에서 흔히
+일어나는 일이다.
+
+`match_result` 도 같이 뒤집히므로 **한 듀얼 안에서 승자 판정은 정확하다.** 깨지는
+것은 매치를 가로질러 같은 사람을 묶을 때뿐이다. 그래서 `player_no` 를 따로 보낸다.
+
+`DuelPlayer*` 포인터는 매치 내내 바뀌지 않으므로, 첫 듀얼에 번호를 찍어두고
+계속 쓴다. 매치가 끝나면 `stat_player_no.clear()` 로 비운다.
+
+## 태그 · 릴레이 듀얼은 집계되지 않는다
+
+전송 조건이 `seats.size() == 2` 라, 플레이어가 넷인 태그(2v2)와 릴레이는 자동으로
+빠진다. 따로 할 일은 없다.
 
 ## 봇 대전은 집계되지 않는다
 

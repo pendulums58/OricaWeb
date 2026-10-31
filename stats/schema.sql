@@ -21,8 +21,10 @@ CREATE TABLE IF NOT EXISTS duels (
 CREATE TABLE IF NOT EXISTS duel_players (
   duel_id TEXT NOT NULL,
   seat    INTEGER NOT NULL,       -- 0 또는 1
-  name    TEXT,                   -- 공개 통계에는 절대 나가지 않는다
-  won     INTEGER NOT NULL,
+  name      TEXT,                 -- 공개 통계에는 절대 나가지 않는다
+  won       INTEGER NOT NULL,
+  deck_hash TEXT,                 -- 메인+엑스트라 구성의 지문. 같은 레시피면 같은 값
+  player_no INTEGER,              -- 매치 안에서 사람을 고정 식별. seat 은 매치 중간에 뒤집힌다
   PRIMARY KEY (duel_id, seat),
   FOREIGN KEY (duel_id) REFERENCES duels(duel_id) ON DELETE CASCADE
 );
@@ -59,5 +61,6 @@ CREATE TABLE IF NOT EXISTS card_usage (
 CREATE INDEX IF NOT EXISTS idx_deck_cards_card ON deck_cards(card_id);
 CREATE INDEX IF NOT EXISTS idx_card_usage_card ON card_usage(card_id);
 CREATE INDEX IF NOT EXISTS idx_duels_source     ON duels(source);
+CREATE INDEX IF NOT EXISTS idx_players_hash  ON duel_players(deck_hash);
 CREATE INDEX IF NOT EXISTS idx_duels_received  ON duels(received_at);
 CREATE INDEX IF NOT EXISTS idx_duels_hidden    ON duels(hidden);

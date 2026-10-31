@@ -67,6 +67,9 @@ function validate(body) {
   const source = body.source === "sim" ? "sim" : "human";
 
   for (const p of body.players) {
+    if (p.player_no !== undefined &&
+        (!Number.isInteger(p.player_no) || p.player_no < 0 || p.player_no > 7))
+      return fail("player_no 가 올바르지 않다");
     if (p.usage === undefined) continue;
     if (!Array.isArray(p.usage)) return fail("usage 가 배열이 아니다");
     if (p.usage.length > 400) return fail("usage 항목이 너무 많다");
@@ -81,6 +84,21 @@ function validate(body) {
     }
   }
   return { ok: true, id, winner, source };
+}
+
+/* 메인 + 엑스트라 구성의 지문. 같은 레시피면 같은 값이 나온다.
+ * 사이드는 넣지 않는다 — 호스트가 보내는 덱은 사이드 교체가 끝난 상태라
+ * 매치의 2·3차전이 1차전과 다른 리스트로 들어오기 때문이다. */
+async function deckHash(deck) {
+  const parts = [];
+  for (const zone of ["main", "extra"]) {
+    for (const [id, qty] of [...tally((deck || {})[zone])].sort((a, b) => a[0] - b[0]))
+      parts.push(`${zone[0]}${id}x${qty}`);
+  }
+  const bytes = new TextEncoder().encode(parts.join(","));
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return [...new Uint8Array(digest)].slice(0, 12)
+    .map(b => b.toString(16).padStart(2, "0")).join("");
 }
 
 function tally(list) {
@@ -129,9 +147,11 @@ async function ingest(request, env, origin) {
   for (const p of body.players) {
     const seat = Number(p.seat);
     stmts.push(env.DB.prepare(
-      "INSERT INTO duel_players (duel_id, seat, name, won) VALUES (?, ?, ?, ?)")
+      `INSERT INTO duel_players (duel_id, seat, name, won, deck_hash, player_no)
+       VALUES (?, ?, ?, ?, ?, ?)`)
       .bind(check.id, seat, p.name ? String(p.name).slice(0, 60) : null,
-            seat === check.winner ? 1 : 0));   // 무승부(2)면 양쪽 다 0
+            seat === check.winner ? 1 : 0, await deckHash(p.deck),
+            Number.isInteger(p.player_no) ? p.player_no : null));   // 무승부(2)면 양쪽 다 0
 
     for (const u of (p.usage || [])) {
       stmts.push(env.DB.prepare(
@@ -154,8 +174,11 @@ async function ingest(request, env, origin) {
 
 /* ---------- 카드별 통계 ---------- */
 async function cardStats(env, origin, url) {
-  const zoneFilter = url.searchParams.get("zone") === "all"
-    ? ZONES : ["main", "extra"];
+  // zone=main (기본, 메인+엑스트라) | all (사이드 포함) | side (사이드만)
+  const zoneWanted = url.searchParams.get("zone");
+  const zoneFilter = zoneWanted === "all" ? ZONES
+                   : zoneWanted === "side" ? ["side"]
+                   : ["main", "extra"];
   const placeholders = zoneFilter.map(() => "?").join(",");
 
   // source=human | sim | all (기본 human — 시뮬레이션이 사람 통계를 덮지 않게)
@@ -186,6 +209,26 @@ async function cardStats(env, origin, url) {
       GROUP BY u.card_id`).bind(...sourceArg).all();
   const usageById = new Map((usage.results || []).map(r => [r.card_id, r]));
 
+  // 고유 덱은 game_no = 1 인 판만 센다 (사이드 교체 전 원본 리스트)
+  const firstGame = " AND (d.game_no IS NULL OR d.game_no <= 1)";
+
+  const uniqueRows = await env.DB.prepare(
+    `SELECT dc.card_id AS card_id, COUNT(DISTINCT dp.deck_hash) AS n
+       FROM (SELECT DISTINCT duel_id, seat, card_id FROM deck_cards
+              WHERE zone IN (${placeholders})) dc
+       JOIN duel_players dp ON dp.duel_id = dc.duel_id AND dp.seat = dc.seat
+       JOIN duels d         ON d.duel_id  = dc.duel_id
+      WHERE d.hidden = 0 AND dp.deck_hash IS NOT NULL${sourceSql}${firstGame}
+      GROUP BY dc.card_id`).bind(...zoneFilter, ...sourceArg).all();
+  const uniqueById = new Map((uniqueRows.results || []).map(r => [r.card_id, r.n]));
+
+  const uniqueTotal = await env.DB.prepare(
+    `SELECT COUNT(DISTINCT dp.deck_hash) AS n
+       FROM duel_players dp
+       JOIN duels d ON d.duel_id = dp.duel_id
+      WHERE d.hidden = 0 AND dp.deck_hash IS NOT NULL${sourceSql}${firstGame}`)
+    .bind(...sourceArg).first();
+
   const totals = await env.DB.prepare(
     `SELECT COUNT(*) AS decks,
             COUNT(DISTINCT dp.duel_id) AS duels
@@ -195,13 +238,16 @@ async function cardStats(env, origin, url) {
 
   return json({
     source: want,
+    zone: zoneWanted === "all" ? "all" : zoneWanted === "side" ? "side" : "main",
     total_decks: totals ? totals.decks : 0,
     total_duels: totals ? totals.duels : 0,
+    unique_decks: uniqueTotal ? uniqueTotal.n : 0,
     cards: (rows.results || []).map(r => {
       const u = usageById.get(r.card_id);
       return {
         id: r.card_id,
         decks: r.decks,
+        unique: uniqueById.get(r.card_id) || 0,
         wins: r.wins,
         decided: r.decided,
         copies: r.copies,
@@ -210,6 +256,124 @@ async function cardStats(env, origin, url) {
       };
     }),
   }, 200, origin);
+}
+
+/* ---------- 덱 레시피별 통계 ----------
+ *
+ * 매치의 1차전 덱을 그 매치의 정식 레시피로 보고, 2·3차전 결과까지 거기에 귀속시킨다.
+ * 사이드 교체 때문에 2·3차전은 리스트가 달라 보이지만 같은 덱이다.
+ *
+ * 사람을 묶는 기준은 seat 이 아니라 player_no 다. 진 쪽이 선공을 고르면
+ * 자리가 매치 중간에 뒤집힌다.
+ *
+ * 집계는 SQL 로 짜기 까다로워 행을 받아 와 여기서 묶는다. 이 규모에서는 충분하다.
+ */
+function groupDecks(rows) {
+  // 1) 매치별·사람별 정식 레시피 = 가장 이른 판의 덱 지문
+  const canon = new Map();            // "mid\u0000player" -> {hash, duel_id, gno}
+  for (const r of rows) {
+    if (r.player_no === null || r.player_no === undefined || !r.deck_hash) continue;
+    const mid = r.match_id || r.duel_id;
+    const key = mid + "\u0000" + r.player_no;
+    const gno = r.game_no == null ? 1 : r.game_no;
+    const cur = canon.get(key);
+    if (!cur || gno < cur.gno)
+      canon.set(key, { hash: r.deck_hash, duel_id: r.duel_id, seat: r.seat, gno });
+  }
+
+  // 2) 레시피별로 듀얼과 매치를 모은다
+  const decks = new Map();            // hash -> 집계
+  const perMatch = new Map();         // "mid\u0000player" -> {hash, wins, games}
+  for (const r of rows) {
+    if (r.player_no === null || r.player_no === undefined) continue;
+    const mid = r.match_id || r.duel_id;
+    const key = mid + "\u0000" + r.player_no;
+    const c = canon.get(key);
+    if (!c) continue;
+
+    let d = decks.get(c.hash);
+    if (!d) {
+      d = { hash: c.hash, duels: 0, duel_wins: 0, matches: 0, match_wins: 0,
+            sample_duel: c.duel_id, sample_seat: c.seat, names: new Set() };
+      decks.set(c.hash, d);
+    }
+    d.duels++;
+    d.duel_wins += r.won;
+    if (r.name) d.names.add(r.name);
+
+    let m = perMatch.get(key);
+    if (!m) { m = { hash: c.hash, mid, wins: 0, games: 0 }; perMatch.set(key, m); }
+    m.wins += r.won;
+    m.games++;
+  }
+
+  // 3) 매치 승패 — 같은 매치 안에서 듀얼을 더 많이 이긴 쪽이 이긴 것
+  const byMatch = new Map();          // mid -> [entry...]
+  for (const m of perMatch.values()) {
+    if (!byMatch.has(m.mid)) byMatch.set(m.mid, []);
+    byMatch.get(m.mid).push(m);
+  }
+  for (const side of byMatch.values()) {
+    const best = Math.max(...side.map(x => x.wins));
+    const tied = side.filter(x => x.wins === best).length > 1;
+    for (const m of side) {
+      const d = decks.get(m.hash);
+      if (!d) continue;
+      d.matches++;
+      if (!tied && m.wins === best && best > 0) d.match_wins++;
+    }
+  }
+
+  return [...decks.values()].map(d => ({
+    hash: d.hash,
+    duels: d.duels,
+    duel_wins: d.duel_wins,
+    matches: d.matches,
+    match_wins: d.match_wins,
+    pilots: d.names.size,
+    sample_duel: d.sample_duel,
+    sample_seat: d.sample_seat,
+  })).sort((a, b) => b.matches - a.matches || b.duels - a.duels);
+}
+
+async function deckStats(env, origin, url) {
+  const want = url.searchParams.get("source") || "human";
+  const sourceSql = want === "all" ? "" : " AND d.source = ?";
+  const sourceArg = want === "all" ? [] : [want === "sim" ? "sim" : "human"];
+
+  const rows = await env.DB.prepare(
+    `SELECT dp.duel_id, dp.seat, dp.name, dp.won, dp.deck_hash, dp.player_no,
+            d.match_id, d.game_no
+       FROM duel_players dp
+       JOIN duels d ON d.duel_id = dp.duel_id
+      WHERE d.hidden = 0${sourceSql}
+      ORDER BY d.received_at
+      LIMIT 20000`).bind(...sourceArg).all();
+
+  const decks = groupDecks(rows.results || []).slice(0, 200);
+
+  // 각 레시피의 카드 목록 — 정식 레시피가 된 그 판의 덱
+  const wanted = decks.map(d => d.sample_duel);
+  const cardsByKey = new Map();
+  if (wanted.length) {
+    const marks = wanted.map(() => "?").join(",");
+    const cards = await env.DB.prepare(
+      `SELECT duel_id, seat, zone, card_id, qty FROM deck_cards
+        WHERE duel_id IN (${marks})`).bind(...wanted).all();
+    for (const c of cards.results || []) {
+      const k = c.duel_id + "\u0000" + c.seat;
+      if (!cardsByKey.has(k)) cardsByKey.set(k, { main: [], extra: [], side: [] });
+      const zone = cardsByKey.get(k)[c.zone];
+      if (zone) zone.push({ id: c.card_id, qty: c.qty });
+    }
+  }
+  for (const d of decks) {
+    d.deck = cardsByKey.get(d.sample_duel + "\u0000" + d.sample_seat)
+          || { main: [], extra: [], side: [] };
+    delete d.sample_seat;
+  }
+
+  return json({ source: want, decks }, 200, origin);
 }
 
 async function summary(env, origin) {
@@ -292,6 +456,9 @@ export default {
 
       if (url.pathname === "/stats/summary" && request.method === "GET")
         return await summary(env, origin);
+
+      if (url.pathname === "/stats/decks" && request.method === "GET")
+        return await deckStats(env, origin, url);
 
       if (url.pathname.startsWith("/admin/")) {
         if (!adminOk(request, env))
