@@ -470,11 +470,14 @@ const ATTRS = {
   "신":["divine","--a-divine"]
 };
 const MARKER_CELLS = ["↖","↑","↗","←",null,"→","↙","↓","↘"];
-/* 카드 목록에 올리지 않는 타입. 토큰은 덱에도 못 넣고 팩에도 안 들어가므로
-   카드로 치지 않는다. 숨김 카드(SCOPE_HIDDEN)는 여기 넣지 않았다 —
-   덱 에디터에서만 빠지고 목록에서는 그대로 본다. */
-const NOT_LISTED_TYPES = ["토큰"];
-const isListed = c => !c.types.some(t => NOT_LISTED_TYPES.includes(t));
+/* 카드 목록에 올리지 않는 태그. 효과 설명 꼬리의 [태그 : 토큰] 을 본다.
+   타입 비트(TYPE_TOKEN)로 거르면 안 된다 — 그건 "덱에 못 넣는다" 는 뜻일 뿐이라
+   목록에는 있어야 할 토큰 카드까지 같이 사라진다. 무엇을 목록에 올릴지는
+   엔진이 아니라 태그로 정한다. */
+const TAG_KEY = "태그";
+const NOT_LISTED_TAGS = ["토큰"];
+const tagsOf = c => (c.labels && c.labels[TAG_KEY]) || [];
+const isListed = c => !tagsOf(c).some(t => NOT_LISTED_TAGS.includes(t));
 let listedCards = [];
 
 const SUMMON_TYPES = ["액세스","페어링","기프트","키","하이잭"];
