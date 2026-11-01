@@ -470,6 +470,13 @@ const ATTRS = {
   "신":["divine","--a-divine"]
 };
 const MARKER_CELLS = ["↖","↑","↗","←",null,"→","↙","↓","↘"];
+/* 카드 목록에 올리지 않는 타입. 토큰은 덱에도 못 넣고 팩에도 안 들어가므로
+   카드로 치지 않는다. 숨김 카드(SCOPE_HIDDEN)는 여기 넣지 않았다 —
+   덱 에디터에서만 빠지고 목록에서는 그대로 본다. */
+const NOT_LISTED_TYPES = ["토큰"];
+const isListed = c => !c.types.some(t => NOT_LISTED_TYPES.includes(t));
+let listedCards = [];
+
 const SUMMON_TYPES = ["액세스","페어링","기프트","키","하이잭"];
 const CLASSIC_TYPES = ["융합","싱크로","엑시즈","링크","의식"];
 
@@ -709,7 +716,8 @@ async function loadAll() {
   if (!header) buildWarnings.push("엔진 헤더를 받지 못해 코드 일람이 비어 있다");
 
   loadedAt = Date.now();
-  topsub.textContent = `카드 ${allCards.length} · 팩 ${packs.length}`;
+  listedCards = allCards.filter(isListed);
+  topsub.textContent = `카드 ${listedCards.length} · 팩 ${packs.length}`;
   showBuiltAt();
   renderTabs();
 }
@@ -719,7 +727,7 @@ let webpSet = null;
 const iconHasWebp = id => webpSet !== null && webpSet.has(id);
 
 const TABS = [
-  { id: "cards",     label: "전체 카드 목록", count: () => allCards.length },
+  { id: "cards",     label: "전체 카드 목록", count: () => listedCards.length },
   { id: "packs",     label: "팩 목록",        count: () => packs.length },
   { id: "deck",      label: "덱 에디터",      count: () => 0 },
   { id: "constants", label: "코드 일람",
@@ -987,9 +995,9 @@ function renderAllCards() {
 
   const head = el("div", "pagehead");
   head.append(el("h2", null, "전체 카드 목록"));
-  const unpacked = allCards.filter(c => !c.number).length;
+  const unpacked = listedCards.filter(c => !c.number).length;
   head.append(el("p", null,
-    `카드 ${allCards.length}장` + (unpacked ? ` · 이 중 ${unpacked}장은 아직 팩에 수록되지 않았다` : "")));
+    `카드 ${listedCards.length}장` + (unpacked ? ` · 이 중 ${unpacked}장은 아직 팩에 수록되지 않았다` : "")));
   view.append(head);
 
   const bar = el("div", "toolbar");
@@ -1004,7 +1012,7 @@ function renderAllCards() {
     ["키", "--f-key"], ["융합", "--f-fusion"], ["싱크로", "--f-synchro"],
     ["엑시즈", "--f-xyz"], ["링크", "--f-link"],
     ["마법", "--f-spell"], ["함정", "--f-trap"],
-  ].filter(([k]) => allCards.some(c => c.types.includes(k)));
+  ].filter(([k]) => listedCards.some(c => c.types.includes(k)));
 
   const chips = el("div", "chiprow");
   for (const [k, color] of kinds) {
@@ -1026,7 +1034,7 @@ function renderAllCards() {
   const draw = q => {
     ul.textContent = "";
     const n = q.trim().toLowerCase();
-    const hits = allCards.filter(c => {
+    const hits = listedCards.filter(c => {
       if (cardFilters.size && ![...cardFilters].some(k => c.types.includes(k))) return false;
       if (!n) return true;
       return c.name.toLowerCase().includes(n)
