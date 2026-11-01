@@ -29,22 +29,48 @@
 
   /* ---------- 매수 세기와 규칙 ---------- */
 
-  const famOf = id => {
+  /* 매수를 세는 단위. 엔진과 같게 거리를 따지지 않고 alias 로 묶는다
+     — "바다 - 아틀란티스" 처럼 이름이 다른 두 카드가 3장을 나눠 쓴다.
+     일러스트를 묶는 card.family 와는 다른 값일 수 있다. */
+  const limitKeyOf = id => {
     const c = ctx.byId.get(id);
-    return c ? (c.family || id) : id;
+    return c ? (c.limitKey || c.id) : id;
   };
 
-  /* 이 명칭을 덱 전체에서 몇 장 쓰고 있나 */
-  function countFamily(fam) {
+  /* 이 카드와 매수를 나눠 쓰는 카드를 덱 전체에서 몇 장 쓰고 있나 */
+  function countShared(card) {
+    const key = card.limitKey || card.id;
     let n = 0;
-    for (const z of zones()) for (const id of z) if (famOf(id) === fam) n++;
+    for (const z of zones()) for (const id of z) if (limitKeyOf(id) === key) n++;
     return n;
   }
 
-  /* 금제가 정한 이 명칭의 허용 매수 */
-  function allowedFor(fam) {
-    const lim = ctx.lflist && ctx.lflist.limits ? ctx.lflist.limits.get(fam) : undefined;
-    return lim === undefined ? DEFAULT_COPIES : lim;
+  /* 금제가 정한 허용 매수. 엔진처럼 자기 ID 를 먼저 보고 없으면 alias 를 본다 */
+  function allowedFor(card) {
+    const lim = ctx.lflist && ctx.lflist.limits;
+    if (!lim) return DEFAULT_COPIES;
+    let v = lim.get(card.id);
+    if (v === undefined && card.alias) v = lim.get(card.alias);
+    return v === undefined ? DEFAULT_COPIES : v;
+  }
+
+  /* 같은 매수를 나눠 쓰는 다른 카드들의 이름 — 왜 막혔는지 알려주려고 쓴다 */
+  function sharersOf(card) {
+    const key = card.limitKey || card.id;
+    const seen = new Set(), out = [];
+    for (const c of ctx.allCards) {
+      if ((c.limitKey || c.id) !== key || c.name === card.name) continue;
+      if (seen.has(c.name)) continue;
+      seen.add(c.name); out.push(c.name);
+    }
+    return out;
+  }
+
+  /* "X 은 3장까지다" / "X 은 Y 와 합쳐 3장까지다" */
+  function limitText(card, allowed) {
+    const others = sharersOf(card);
+    const who = others.length ? `${card.name} 은 ${others.join(", ")} 와 합쳐` : `${card.name} 은`;
+    return `${who} ${allowed}장까지다`;
   }
 
   function zoneCap(which) {
@@ -55,11 +81,10 @@
   function placeFor(card) {
     if (card.deckable === false)
       return { error: `${card.name} 은 덱에 넣을 수 없는 카드다` };
-    const fam = card.family || card.id;
-    const allowed = allowedFor(fam);
+    const allowed = allowedFor(card);
     if (allowed === 0) return { error: `${card.name} 은 금지 카드다` };
-    if (countFamily(fam) >= allowed)
-      return { error: `${card.name} 은 ${allowed}장까지다` };
+    if (countShared(card) >= allowed)
+      return { error: limitText(card, allowed) };
 
     const natural = card.deck === "extra" ? "extra" : "main";
     const order = target === "side" ? ["side", natural] : [natural, "side"];
@@ -80,17 +105,30 @@
     if (deck.extra.length > EXTRA_MAX) errors.push(`엑스트라 덱이 ${EXTRA_MAX}장을 넘었다`);
     if (deck.side.length > SIDE_MAX) errors.push(`사이드 덱이 ${SIDE_MAX}장을 넘었다`);
 
-    const seen = new Map();
+    // 매수는 alias 로 묶인 덩어리째 센다. 한 덩어리에 이름이 다른 카드가
+    // 섞여 있으면(바다 - 아틀란티스) 각자의 허용치를 모두 만족해야 한다.
+    const groups = new Map();   // limitKey -> { n, cards:Map(name->card) }
     for (const z of zones()) for (const id of z) {
-      const f = famOf(id);
-      seen.set(f, (seen.get(f) || 0) + 1);
+      const key = limitKeyOf(id);
+      let g = groups.get(key);
+      if (!g) { g = { n: 0, cards: new Map() }; groups.set(key, g); }
+      g.n++;
+      const c = ctx.byId.get(id);
+      if (c) g.cards.set(c.name, c);
     }
-    for (const [fam, n] of seen) {
-      const allowed = allowedFor(fam);
-      const c = ctx.byId.get(fam) || ctx.byId.get([...zones().flat()].find(i => famOf(i) === fam));
-      const nm = c ? c.name : `ID ${fam}`;
-      if (n > allowed)
-        errors.push(allowed === 0 ? `${nm} 은 금지 카드다` : `${nm} 이 ${n}장이다 — ${allowed}장까지`);
+    for (const [key, g] of groups) {
+      if (!g.cards.size) continue;   // 풀에 없는 ID — 아래에서 따로 경고한다
+      const names = [...g.cards.keys()];
+      const label = names.length > 1 ? names.join(" + ") : names[0];
+      let worst = null;
+      for (const c of g.cards.values()) {
+        const allowed = allowedFor(c);
+        if (g.n > allowed && (worst === null || allowed < worst)) worst = allowed;
+      }
+      if (worst === null) continue;
+      errors.push(worst === 0
+        ? `${label} 은 금지 카드다`
+        : `${label} 이 합쳐 ${g.n}장이다 — ${worst}장까지`);
     }
 
     // 잘못된 존에 들어간 카드 (주로 .ydk 를 들여올 때 생긴다)
@@ -543,7 +581,7 @@
       b.append(el("span", "nopic", c ? c.name : String(id)));
     }
     if (n > 1) b.append(el("span", "cnt", "×" + n));
-    const allowed = c ? allowedFor(c.family || c.id) : DEFAULT_COPIES;
+    const allowed = c ? allowedFor(c) : DEFAULT_COPIES;
     if (allowed < DEFAULT_COPIES) b.append(el("span", "lim l" + allowed, String(allowed)));
     b.title = (c ? c.name : "ID " + id) + " — 누르면 1장 뺀다";
     b.addEventListener("click", () => removeOne(which, id));
@@ -690,10 +728,12 @@
     const badge = ctx.attrBadge(c.attribute);
     if (badge) pic.append(badge);
 
-    const fam = c.family || c.id;
-    const used = countFamily(fam);
-    const allowed = allowedFor(fam);
-    if (used) pic.append(el("span", "inuse", `${used}장 넣음`));
+    // used 는 매수를 나눠 쓰는 카드까지 합한 수다. 그래야 왜 막혔는지 보인다
+    const used = countShared(c);
+    const allowed = allowedFor(c);
+    const shared = sharersOf(c);
+    if (used) pic.append(el("span", "inuse",
+      shared.length ? `${used}장 (합산)` : `${used}장 넣음`));
     if (allowed < DEFAULT_COPIES) pic.append(el("span", "lim l" + allowed, String(allowed)));
     const rate = usageOf(c);
     if (rate != null) pic.append(el("span", "rate", Math.round(rate * 100) + "%"));
@@ -705,7 +745,10 @@
     b.append(cap);
 
     if (used >= allowed) b.classList.add("maxed");
-    b.title = allowed === 0 ? `${c.name} — 금지 카드` : `${c.name} — 누르면 넣는다 (${used}/${allowed})`;
+    b.title = allowed === 0
+      ? `${c.name} — 금지 카드`
+      : `${c.name} — 누르면 넣는다 (${used}/${allowed})`
+        + (shared.length ? `\n${shared.join(", ")} 와 매수를 나눠 쓴다` : "");
     b.addEventListener("click", () => add(c));
 
     const info = el("button", "dkinfo", "ⓘ");

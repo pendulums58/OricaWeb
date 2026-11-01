@@ -159,6 +159,11 @@
     if (parsed.credits.length) card.credits = parsed.credits;
     if (Object.keys(parsed.labels).length) card.labels = parsed.labels;
     if (row.alias) card.alias = row.alias;
+    // 매수를 세는 단위. 엔진은 거리를 따지지 않고 alias 로 묶는다
+    // (deck_manager.cpp: `code = cit->alias ? cit->alias : cit->code`).
+    // 그래서 "바다 - 아틀란티스" 처럼 멀리 떨어진 alias 도 3장을 나눠 쓴다.
+    // 일러스트 변형을 묶는 card.family 와는 다른 값일 수 있다.
+    card.limitKey = row.alias || row.id;
 
     if (isMonster) {
       card.atk = row.atk;
@@ -226,9 +231,11 @@
        덱에서 3장 제한과 금제를 세는 단위다. 일러스트가 달라도 같은 카드다. */
     const family = new Map();
     const familyOf = new Map();
+    const aliasOf = new Map();   // alias 를 가진 카드만. 금제를 적을 때 짚어 주려고 쓴다
     for (const r of rows) {
       if (r.type & TYPE_UNLOCKED) continue;
       let base = r.alias || r.id;
+      if (r.alias) aliasOf.set(r.id, r.alias);
       if (r.alias && Math.abs(r.id - r.alias) > ART_SPAN) base = r.id;
       familyOf.set(r.id, base);
       if (!family.has(base)) family.set(base, []);
@@ -305,7 +312,7 @@
       warnings.push("정의되지 않은 종족 비트: " + parts);
     }
 
-    return { allCards, packs: packIndex, warnings, usedIds: [...seen.keys()].sort((a, b) => a - b), nameOf, familyOf, rows };
+    return { allCards, packs: packIndex, warnings, usedIds: [...seen.keys()].sort((a, b) => a - b), nameOf, familyOf, aliasOf, rows };
   }
 
   /* 할당표를 실제 카드와 대조 */
@@ -474,15 +481,21 @@
   }
 
   /* 금제를 읽는다. lflist.json 객체도, EDOPro 의 lflist.conf 텍스트도 받는다.
-     돌려주는 limits 는 "명칭 대표 ID -> 허용 매수" 다. 목록에 없으면 3장.
-     familyOf 를 주면 일러스트 변형 중 어느 ID 로 적어도 그룹 전체에 걸린다. */
-  function parseLflist(src, familyOf) {
+     limits 는 적힌 ID 를 그대로 쓴다. 엔진이 "자기 ID 먼저, 없으면 alias" 로
+     찾기 때문에(deck_manager.h) 여기서 미리 접으면 엔진과 어긋난다.
+     aliasOf 를 주면 alias 를 가진 ID 에 적었을 때 짚어 준다 — 그 경우 그
+     일러스트 / 그 카드에만 걸리고 본체에는 안 걸리기 때문이다. */
+  function parseLflist(src, aliasOf) {
     const out = { name: null, updated: null, limits: new Map(), issues: [] };
     const put = (id, n) => {
-      const key = (familyOf && familyOf.get(id)) || id;
-      if (out.limits.has(key) && out.limits.get(key) !== n)
-        out.issues.push(`ID ${id} 의 제한이 같은 명칭의 다른 항목과 어긋난다`);
-      out.limits.set(key, n);
+      if (out.limits.has(id) && out.limits.get(id) !== n)
+        out.issues.push(`ID ${id} 가 두 번 적혀 있고 값이 다르다`);
+      out.limits.set(id, n);
+      const base = aliasOf && aliasOf.get(id);
+      if (base && !(src && src.limits && String(base) in src.limits))
+        out.issues.push(
+          `ID ${id} 는 ${base} 의 alias 라 이 항목은 ${id} 에만 걸린다` +
+          ` — 본체도 묶으려면 ${base} 를 적는다`);
     };
 
     if (typeof src === "string") {

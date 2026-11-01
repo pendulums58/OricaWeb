@@ -695,7 +695,7 @@ async function loadAll() {
   allocations = OricaDecode.reconcile(allocSrc, rows, built.nameOf, built.usedIds);
 
   // 금제. 없으면 전 카드 3장으로 돌아간다
-  lflist = OricaDecode.parseLflist(lflistSrc, built.familyOf);
+  lflist = OricaDecode.parseLflist(lflistSrc, built.aliasOf);
   if (lflistSrc && lflist.issues.length)
     buildWarnings.push("금제 파일: " + lflist.issues.join(", "));
 
