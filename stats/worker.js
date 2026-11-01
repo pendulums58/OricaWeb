@@ -5,6 +5,7 @@
  * GET  /stats/summary 전체 요약
  * GET  /admin/duels  최근 기록 (관리자 토큰 필요)
  * POST /admin/hide   잘못된 기록 숨기기 (관리자 토큰 필요)
+ * GET  /update       CyanPro 클라이언트 자동 업데이트 목록
  */
 
 const MAX_BODY = 64 * 1024;
@@ -435,6 +436,68 @@ async function adminHide(request, env, origin) {
   return json({ ok: true, hidden }, 200, origin);
 }
 
+/* ---------- 클라이언트 자동 업데이트 ----------
+ * CyanPro 의 client_updater 가 시작할 때 GET 한다. User-Agent 가
+ * "CyanPro-Windows-1.0.3 ..." 꼴이라 여기서 버전을 읽는다.
+ * 응답은 [{ name, url, md5 }] 배열이고, 빈 배열이면 "업데이트 없음".
+ * 최신 릴리스에 CyanPro-<ver>-update.zip 과 CyanPro-<ver>-update.md5 가
+ * 둘 다 있어야 업데이트를 내준다. 클라이언트는 zip 을 실행 폴더에 그대로
+ * 풀기 때문에, 전체 배포 zip 이 아니라 exe 만 든 zip 이어야 한다.
+ */
+const RELEASE_REPO = "pendulums58/CyanPro";
+
+const parseVersion = s => {
+  const m = /^v?(\d+)\.(\d+)\.(\d+)$/.exec(String(s || "").trim());
+  return m ? m.slice(1).map(Number) : null;
+};
+const newerThan = (a, b) => {
+  for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] > b[i];
+  return false;
+};
+
+async function clientUpdate(request, env) {
+  const none = () => json([]);
+  const ua = request.headers.get("user-agent") || "";
+  const m = /^CyanPro-Windows-(\d+\.\d+\.\d+)\b/.exec(ua);
+  // 윈도우용 업데이트 파일만 만든다
+  if (!m) return none();
+  const current = parseVersion(m[1]);
+
+  const gh = { "user-agent": "cyanpro-stats", accept: "application/vnd.github+json" };
+  if (env.GITHUB_TOKEN) gh.authorization = `Bearer ${env.GITHUB_TOKEN}`;
+  // 익명 API 는 시간당 60회라 5분 캐시한다
+  const res = await fetch(`https://api.github.com/repos/${RELEASE_REPO}/releases/latest`,
+    { headers: gh, cf: { cacheTtl: 300, cacheEverything: true } });
+  if (!res.ok) {
+    console.log(`update: GitHub API returned ${res.status}`);
+    return none();
+  }
+  const release = await res.json();
+  const latest = parseVersion(release.tag_name);
+  if (!latest) {
+    console.log(`update: unparseable tag ${release.tag_name}`);
+    return none();
+  }
+  if (!newerThan(latest, current)) return none();
+
+  const ver = latest.join(".");
+  const assets = release.assets || [];
+  const zip = assets.find(a => a.name === `CyanPro-${ver}-update.zip`);
+  const md5Asset = assets.find(a => a.name === `CyanPro-${ver}-update.md5`);
+  if (!zip || !md5Asset) {
+    console.log(`update: release ${release.tag_name} has no update zip/md5`);
+    return none();
+  }
+  const md5Res = await fetch(md5Asset.browser_download_url,
+    { cf: { cacheTtl: 3600, cacheEverything: true } });
+  const md5 = md5Res.ok ? (await md5Res.text()).trim().split(/\s+/)[0].toLowerCase() : "";
+  if (!/^[0-9a-f]{32}$/.test(md5)) {
+    console.log(`update: bad md5 asset for ${release.tag_name}`);
+    return none();
+  }
+  return json([{ name: zip.name, url: zip.browser_download_url, md5 }]);
+}
+
 /* ---------- 라우팅 ---------- */
 export default {
   async fetch(request, env) {
@@ -459,6 +522,9 @@ export default {
 
       if (url.pathname === "/stats/decks" && request.method === "GET")
         return await deckStats(env, origin, url);
+
+      if (url.pathname === "/update" && request.method === "GET")
+        return await clientUpdate(request, env);
 
       if (url.pathname.startsWith("/admin/")) {
         if (!adminOk(request, env))
