@@ -70,7 +70,15 @@
       "purpose": "환영검",
       "note": "",
       "status": "active"
-    }		
+    },
+    {
+      "from": 140006000,
+      "to": 140006999,
+      "owner": "시안색새벽",
+      "purpose": "스토리텔러",
+      "note": "",
+      "status": "active"
+    }	
   ],
   "setcodes": [
     { "code": "0x300", "name": "마칭 파이어", "owner": "키로스타스", "note": "" },
@@ -81,6 +89,7 @@
 	{ "code": "0x305", "name": "벨루티나", "owner": "마루이후루", "note": "" },
 	{ "code": "0x306", "name": "프레자일", "owner": "녹황", "note": "" },
 	{ "code": "0x307", "name": "환영검", "owner": "시안색새벽", "note": "" },
-	{ "code": "0x1307", "name": "환영검사", "owner": "시안색새벽", "note": "" }
+	{ "code": "0x1307", "name": "환영검사", "owner": "시안색새벽", "note": "" },
+	{ "code": "0x308", "name": "스토리텔러", "owner": "시안색새벽", "note": "" }
   ]
 }
