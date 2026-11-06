@@ -256,16 +256,23 @@ table.sheet td.who.none{font-weight:400;color:var(--fg-faint);font-style:italic}
 .statbar{display:flex;align-items:center;gap:8px;min-width:132px}
 .statbar .track{flex:1;height:6px;border-radius:3px;background:var(--surface-3);overflow:hidden;min-width:56px}
 .statbar .track i{display:block;height:100%;border-radius:3px;background:var(--accent)}
+.statbar.sm{min-width:84px}
+.statbar.sm .track{min-width:30px}
 .statbar .pct{font-family:var(--font-mono);font-size:11px;color:var(--fg-dim);
   font-variant-numeric:tabular-nums;white-space:nowrap}
 .wr{font-family:var(--font-mono);font-size:12px;font-variant-numeric:tabular-nums;white-space:nowrap}
 .wr .ci{color:var(--fg-faint);font-size:10.5px;margin-left:5px}
 .wr.thin{color:var(--fg-faint)}
+.diff{font-family:var(--font-mono);font-size:12px;font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap;color:var(--fg-dim)}
+.diff.up{color:var(--f-spell)}
+.diff.down{color:var(--f-trap)}
+.diff.thin{font-weight:400;opacity:.55}
 .thinflag{font-size:10px;color:var(--warn,#b4751a);border:1px solid currentColor;
   border-radius:999px;padding:1px 6px;margin-left:6px;white-space:nowrap}
-.statname{display:flex;align-items:center;gap:7px;min-width:0}
+.statname{display:flex;align-items:center;gap:7px;min-width:9.5em}
 .statname .pip{flex:0 0 auto}
-.statname b{font-weight:600;font-size:12.5px;overflow-wrap:anywhere}
+/* 칸이 많아지면 이름 칸이 먼저 눌린다. 한글을 글자 단위로 끊지 않고 띄어쓰기에서만 접는다 */
+.statname b{font-weight:600;font-size:12.5px;word-break:keep-all;overflow-wrap:normal}
 .deckrow .rec{font-family:var(--font-mono);font-size:10.5px;color:var(--fg-faint)}
 .deckbox{background:var(--surface-2);padding:12px 14px}
 .deckbox h4{margin:0 0 7px;font-size:11px;letter-spacing:.05em;color:var(--fg-dim);text-transform:uppercase}
@@ -399,8 +406,8 @@ footer .wrap{padding-block:20px 36px;font-size:11.5px;color:var(--fg-faint);line
   .dkzone:first-child{grid-column:1/-1}
 }
 
-/* 덱 탭에서만 본문을 넓힌다. 2단으로 갈라야 해서 1100px 로는 좁다 */
-body.deckwide .wrap{max-width:1480px}
+/* 덱 에디터(2단)와 대전 통계(칸이 많다)에서만 본문을 넓힌다. 1100px 로는 좁다 */
+body.widepage .wrap{max-width:1480px}
 
 @media (min-width:1080px){
   .dkwork{display:grid;grid-template-columns:minmax(0,1fr) 404px;align-items:start}
@@ -976,8 +983,8 @@ function paintCard() {
 function route() {
   const h = decodeURIComponent(location.hash.replace(/^#/, ""));
   renderTabs();
-  // 덱 에디터만 2단이라 본문을 넓게 쓴다
-  document.body.classList.toggle("deckwide", currentTab() === "deck");
+  // 덱 에디터는 2단이고 대전 통계는 칸이 많아 본문을 넓게 쓴다
+  document.body.classList.toggle("widepage", ["deck", "stats"].includes(currentTab()));
   if (h === "packs") renderList();
   else if (h === "deck" || h.startsWith("deck=")) renderDeck(h.startsWith("deck=") ? h.slice(5) : null);
   else if (h === "constants") renderConstants();
@@ -1105,6 +1112,7 @@ async function loadStats(force) {
     by_source: (sum && sum.by_source) || [],
     total_decks: cards.total_decks || 0,
     unique_decks: cards.unique_decks || 0,
+    play_duels: cards.play_duels || 0,   // 사용 기록을 보낸 판 수 — 사용 통계의 분모가 따로 논다
     total_duels: (sum && sum.duels) || 0,
     first_at: sum && sum.first_at,
     last_at: sum && sum.last_at,
@@ -1172,7 +1180,8 @@ async function renderStats() {
   const sortSel = document.createElement("select");
   sortSel.className = "abtn";
   for (const [v, label] of [["decks", "채용 많은 순"], ["rate", "채용률 순"],
-                            ["win", "승률 순"], ["name", "이름순"]]) {
+                            ["win", "승률 순"], ["used", "사용률 순"],
+                            ["impact", "사용 효과 순"], ["name", "이름순"]]) {
     const o = document.createElement("option");
     o.value = v; o.textContent = label;
     sortSel.append(o);
@@ -1194,6 +1203,8 @@ async function renderStats() {
   sub.textContent = `듀얼 ${data.total_duels}판 · 덱 ${data.total_decks}개`
     + (data.unique_decks ? ` (서로 다른 레시피 ${data.unique_decks}가지)` : "")
     + "에서 집계했다."
+    + (data.play_duels && data.play_duels < data.total_duels
+       ? ` 사용 통계는 사용 기록이 있는 ${data.play_duels}판만 본다.` : "")
     + (data.total_decks < MIN_SAMPLE * 2
        ? " 아직 표본이 적어 승률은 참고만 해라." : "");
 
@@ -1204,13 +1215,36 @@ async function renderStats() {
     return;
   }
 
+  // 선택률(offered/taken)은 시뮬레이션만 보낸다. 사람 대전 화면에서는 전부
+  // "기회 없음" 이 되므로, 값이 하나라도 있을 때만 칸을 둔다.
+  const showOffered = statsSource !== "human"
+    || [...data.byId.values()].some(s => s.offered);
+  // 사용 통계는 사용 기록을 보낸 판이 있어야 나온다
+  const showPlay = data.play_duels > 0;
+  if (!showPlay)
+    for (const o of [...sortSel.options])
+      if (o.value === "used" || o.value === "impact") o.remove();
+
   const wrap = el("div", "sheetwrap");
   const table = el("table", "sheet");
   const thead = document.createElement("thead");
   const hr = document.createElement("tr");
   const headCells = [];
-  for (const h of ["카드", "번호", "채용률", "채용 덱", "평균 매수", "선택률", "승률"])
-    headCells.push(hr.appendChild(el("th", null, h)));
+  const heads = ["카드", "번호", "채용률", "채용 덱", "평균 매수"];
+  if (showOffered) heads.push("선택률");
+  heads.push("승률");
+  if (showPlay) heads.push("사용률", "사용 시 승률", "미사용 시 승률", "차이");
+  const headTips = {
+    "사용률": "덱에 있던 판 중 한 번이라도 발동하거나 소환한 판의 비율. 한 판에 여러 번 써도 1 로 센다",
+    "사용 시 승률": "그 카드를 쓴 판의 승률. 이기는 판일수록 카드를 많이 쓰므로 거의 모든 카드가 덱 승률보다 높게 나온다",
+    "미사용 시 승률": "덱에는 있었지만 쓰지 않은 판의 승률",
+    "차이": "사용 시 승률 − 미사용 시 승률. 클수록 그 카드를 쓰느냐가 판을 가른다",
+  };
+  for (const h of heads) {
+    const th = hr.appendChild(el("th", null, h));
+    if (headTips[h]) th.title = headTips[h];
+    headCells.push(th);
+  }
   thead.append(hr);
   table.append(thead);
   const tbody = document.createElement("tbody");
@@ -1227,7 +1261,17 @@ async function renderStats() {
       const name = card ? card.name : `#${id}`;
       if (q && !name.toLowerCase().includes(q) && !String(id).includes(q)) continue;
       const decided = st.decided == null ? st.decks : st.decided;
-      rows.push({ id, card, name, st, decided, w: wilson(st.wins, decided) });
+      const pl = st.play || null;
+      const pu = pl ? wilson(pl.used_wins, pl.used_decided) : null;
+      const pn = pl ? wilson(pl.unused_wins, pl.unused_decided) : null;
+      rows.push({
+        id, card, name, st, decided, w: wilson(st.wins, decided),
+        pl, pu, pn,
+        usedRate: pl && pl.games ? pl.used / pl.games : null,
+        impact: pu && pn ? pu.p - pn.p : null,
+        // 양쪽 다 표본이 차야 차이를 믿을 수 있다
+        solid: !!(pl && pl.used_decided >= MIN_SAMPLE && pl.unused_decided >= MIN_SAMPLE),
+      });
     }
     const mode = sortSel.value;
     rows.sort((a, b) => {
@@ -1236,6 +1280,12 @@ async function renderStats() {
         const aw = a.decided >= MIN_SAMPLE && a.w ? a.w.lo : -1;
         const bw = b.decided >= MIN_SAMPLE && b.w ? b.w.lo : -1;
         return bw - aw;
+      }
+      if (mode === "used") return (b.usedRate ?? -1) - (a.usedRate ?? -1);
+      if (mode === "impact") {
+        // 표본이 찬 카드를 먼저, 그 안에서 차이가 큰 순
+        if (a.solid !== b.solid) return a.solid ? -1 : 1;
+        return (b.impact ?? -9) - (a.impact ?? -9);
       }
       if (statsBasis === "unique") return (b.st.unique || 0) - (a.st.unique || 0);
       return b.st.decks - a.st.decks;
@@ -1246,7 +1296,7 @@ async function renderStats() {
     if (!rows.length) {
       const tr = document.createElement("tr");
       const td = el("td", null, "조건에 맞는 카드가 없다.");
-      td.colSpan = 7;
+      td.colSpan = headCells.length;
       td.style.cssText = "color:var(--fg-faint);padding:22px 12px;text-align:center";
       tr.append(td); tbody.append(tr);
       return;
@@ -1286,54 +1336,107 @@ async function renderStats() {
       tr.append(el("td", "num", String(hit)));
       tr.append(el("td", "num", (r.st.copies / r.st.decks).toFixed(2)));
 
-      // 분모는 드로우가 아니라 "엔진이 합법적 선택지로 제시한 횟수" 다.
-      // 서치·덤핑으로 꺼내 쓰는 비율이 높아 드로우로는 잴 수 없다.
-      const useTd = document.createElement("td");
-      if (r.st.offered) {
-        const ratio = r.st.taken / r.st.offered;
-        const box = el("span", "wr" + (ratio < 0.2 ? " thin" : ""));
-        box.append(document.createTextNode((ratio * 100).toFixed(0) + "%"));
-        box.title = `선택지로 ${r.st.offered}회 제시돼 ${r.st.taken}회 선택`;
-        useTd.append(box);
-        if (ratio < 0.2) {
-          const f = el("span", "thinflag", "미선택");
-          f.title = "AI 가 기회를 받고도 거의 고르지 않았다. 이 카드의 승률은 믿을 수 없다";
-          useTd.append(f);
-        }
-      } else if (r.st.decks) {
-        const box = el("span", "wr thin", "기회 없음");
-        box.title = "합법적 선택지로 제시된 적이 없다. 루트가 성립하지 않았거나 서치되지 않았다";
-        useTd.append(box);
-      } else {
-        useTd.append(el("span", "wr thin", "—"));
-      }
-      tr.append(useTd);
+      if (showOffered) tr.append(offeredCell(r));
+      tr.append(winCell(r.w, r.decided));
 
-      const wrTd = document.createElement("td");
-      if (!r.w || !r.decided) {
-        wrTd.append(el("span", "wr thin", "—"));
-      } else {
-        const thin = r.decided < MIN_SAMPLE;
-        const box = el("span", "wr" + (thin ? " thin" : ""));
-        box.append(document.createTextNode((r.w.p * 100).toFixed(1) + "%"));
-        box.append(el("span", "ci",
-          `${(r.w.lo * 100).toFixed(0)}–${(r.w.hi * 100).toFixed(0)}`));
-        wrTd.append(box);
-        if (thin) {
-          const f = el("span", "thinflag", `n=${r.decided}`);
-          f.title = `표본이 ${MIN_SAMPLE}개 미만이라 숫자를 믿기 어렵다`;
-          wrTd.append(f);
+      if (showPlay) {
+        const pl = r.pl;
+        // 사용률
+        const uTd = document.createElement("td");
+        if (pl && pl.games) {
+          const sb = el("div", "statbar sm");
+          const track = el("div", "track");
+          const fill = el("i");
+          fill.style.width = Math.max(r.usedRate * 100, pl.used ? 2 : 0) + "%";
+          track.append(fill);
+          sb.append(track, el("span", "pct", (r.usedRate * 100).toFixed(0) + "%"));
+          sb.title = `덱에 있던 ${pl.games}판 중 ${pl.used}판에서 썼다`
+            + ` (발동 ${pl.activated}판 · 소환 ${pl.summoned}판)`;
+          uTd.append(sb);
+        } else {
+          uTd.append(el("span", "wr thin", "—"));
         }
+        tr.append(uTd);
+
+        tr.append(winCell(r.pu, pl ? pl.used_decided : 0));
+        tr.append(winCell(r.pn, pl ? pl.unused_decided : 0));
+
+        // 차이 — 양쪽 표본이 다 차기 전에는 흐리게
+        const dTd = document.createElement("td");
+        if (r.impact == null) {
+          dTd.append(el("span", "wr thin", "—"));
+        } else {
+          const pp = r.impact * 100;
+          const cls = "diff" + (pp >= 0.5 ? " up" : pp <= -0.5 ? " down" : "") + (r.solid ? "" : " thin");
+          const box = el("span", cls, (pp > 0 ? "+" : "") + pp.toFixed(1) + "%p");
+          box.title = r.solid ? "사용 시 승률 − 미사용 시 승률"
+            : `한쪽 표본이 ${MIN_SAMPLE}판 미만이라 아직 믿기 어렵다`
+              + ` (사용 ${pl.used_decided}판 · 미사용 ${pl.unused_decided}판)`;
+          dTd.append(box);
+        }
+        tr.append(dTd);
       }
-      tr.append(wrTd);
       tbody.append(tr);
     }
   };
+
+  // 승률 칸: 값 + 윌슨 구간, 표본이 적으면 흐리게
+  function winCell(w, n) {
+    const td = document.createElement("td");
+    if (!w || !n) { td.append(el("span", "wr thin", "—")); return td; }
+    const thin = n < MIN_SAMPLE;
+    const box = el("span", "wr" + (thin ? " thin" : ""));
+    box.append(document.createTextNode((w.p * 100).toFixed(1) + "%"));
+    box.append(el("span", "ci", `${(w.lo * 100).toFixed(0)}–${(w.hi * 100).toFixed(0)}`));
+    td.append(box);
+    if (thin) {
+      const f = el("span", "thinflag", `n=${n}`);
+      f.title = `표본이 ${MIN_SAMPLE}개 미만이라 숫자를 믿기 어렵다`;
+      td.append(f);
+    }
+    return td;
+  }
+
+  // 선택률 칸 (시뮬레이션). 분모는 드로우가 아니라 "엔진이 합법적 선택지로
+  // 제시한 횟수" 다. 서치·덤핑으로 꺼내 쓰는 비율이 높아 드로우로는 잴 수 없다.
+  function offeredCell(r) {
+    const useTd = document.createElement("td");
+    if (r.st.offered) {
+      const ratio = r.st.taken / r.st.offered;
+      const box = el("span", "wr" + (ratio < 0.2 ? " thin" : ""));
+      box.append(document.createTextNode((ratio * 100).toFixed(0) + "%"));
+      box.title = `선택지로 ${r.st.offered}회 제시돼 ${r.st.taken}회 선택`;
+      useTd.append(box);
+      if (ratio < 0.2) {
+        const f = el("span", "thinflag", "미선택");
+        f.title = "AI 가 기회를 받고도 거의 고르지 않았다. 이 카드의 승률은 믿을 수 없다";
+        useTd.append(f);
+      }
+    } else if (r.st.decks) {
+      const box = el("span", "wr thin", "기회 없음");
+      box.title = "합법적 선택지로 제시된 적이 없다. 루트가 성립하지 않았거나 서치되지 않았다";
+      useTd.append(box);
+    } else {
+      useTd.append(el("span", "wr thin", "—"));
+    }
+    return useTd;
+  }
 
   filter.addEventListener("input", () => draw());
   sortSel.addEventListener("change", () => draw());
 
   draw();
+
+  if (showPlay) {
+    const playNote = el("p", "hint");
+    playNote.style.cssText = "margin-top:12px;font-size:11.5px;color:var(--fg-faint);line-height:1.7";
+    playNote.textContent =
+      "사용은 그 판에 한 번이라도 발동하거나 소환한 것이다. 여러 번 써도 한 번으로 센다. "
+      + "소재나 코스트로만 쓰인 카드는 사용으로 잡히지 않는다. "
+      + "사용 시 승률은 혼자 보면 안 된다 — 이기는 판일수록 카드를 많이 쓰게 되니 거의 모든 카드가 "
+      + "높게 나온다. 미사용 시 승률과의 차이를, 같은 덱의 다른 카드와 견줘서 봐라.";
+    view.append(playNote);
+  }
 
   if (statsZone !== "main") {
     const sideNote = el("p", "hint");

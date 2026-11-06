@@ -1,7 +1,7 @@
 /* CyanPro 듀얼 통계 수집기 (Cloudflare Worker + D1)
  *
  * POST /duels        CyanPro 호스트가 듀얼 결과를 보낸다
- * GET  /stats/cards  카드별 채용률·승률
+ * GET  /stats/cards  카드별 채용률·승률, 사용 시 / 미사용 시 승률
  * GET  /stats/summary 전체 요약
  * GET  /admin/duels  최근 기록 (관리자 토큰 필요)
  * POST /admin/hide   잘못된 기록 숨기기 (관리자 토큰 필요)
@@ -71,6 +71,16 @@ function validate(body) {
     if (p.player_no !== undefined &&
         (!Number.isInteger(p.player_no) || p.player_no < 0 || p.player_no > 7))
       return fail("player_no 가 올바르지 않다");
+    // 이 판에 한 번이라도 발동 / 소환한 카드 코드. 호스트가 가공 없이 보낸다
+    for (const k of ["activated", "summoned"]) {
+      const list = p[k];
+      if (list === undefined) continue;
+      if (!Array.isArray(list)) return fail(`${k} 가 배열이 아니다`);
+      if (list.length > 300) return fail(`${k} 항목이 너무 많다`);
+      for (const c of list)
+        if (!Number.isInteger(c) || c <= 0 || c > 0xFFFFFFFF)
+          return fail(`${k} 의 카드 ID 가 올바르지 않다`);
+    }
     if (p.usage === undefined) continue;
     if (!Array.isArray(p.usage)) return fail("usage 가 배열이 아니다");
     if (p.usage.length > 400) return fail("usage 항목이 너무 많다");
@@ -84,7 +94,11 @@ function validate(body) {
       }
     }
   }
-  return { ok: true, id, winner, source };
+  // 양쪽 다 사용 기록을 보냈을 때만 이 판을 사용 통계에 넣는다.
+  // 패치 전 호스트가 보낸 판을 "아무것도 안 쓴 판" 으로 세면 미사용 승률이 망가진다.
+  const hasPlay = body.players.every(p =>
+    Array.isArray(p.activated) && Array.isArray(p.summoned));
+  return { ok: true, id, winner, source, hasPlay };
 }
 
 /* 메인 + 엑스트라 구성의 지문. 같은 레시피면 같은 값이 나온다.
@@ -106,6 +120,22 @@ function tally(list) {
   const m = new Map();
   for (const c of list || []) m.set(c, (m.get(c) || 0) + 1);
   return m;
+}
+
+/* 이 판에 쓴 카드 중 그 사람 메인 + 엑스트라에 있던 것만 남긴다.
+ * 토큰, 상대에게서 뺏었지만 내 덱엔 없는 카드는 여기서 빠진다.
+ * 양쪽 덱에 다 있는 카드를 뺏어 썼다면 쓴 사람 몫으로 센다 —
+ * 자기 덱에서 꺼내 쓴 것과 다르지 않다. */
+function playedRows(p) {
+  const deck = p.deck || {};
+  const inDeck = new Set([...(deck.main || []), ...(deck.extra || [])]);
+  const act = new Set((p.activated || []).filter(c => inDeck.has(c)));
+  const sum = new Set((p.summoned || []).filter(c => inDeck.has(c)));
+  return [...new Set([...act, ...sum])].sort((a, b) => a - b).map(card_id => ({
+    card_id,
+    activated: act.has(card_id) ? 1 : 0,
+    summoned: sum.has(card_id) ? 1 : 0,
+  }));
 }
 
 /* ---------- 수집 ---------- */
@@ -131,8 +161,8 @@ async function ingest(request, env, origin) {
   const stmts = [
     env.DB.prepare(
       `INSERT INTO duels (duel_id, match_id, game_no, format, winner, ended_at,
-                          version, reporter, received_at, source)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(
+                          version, reporter, received_at, source, has_play)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(
       check.id,
       body.match_id ? String(body.match_id).slice(0, 64) : null,
       Number.isFinite(Number(body.game_no)) ? Number(body.game_no) : null,
@@ -142,7 +172,8 @@ async function ingest(request, env, origin) {
       body.version ? String(body.version).slice(0, 40) : null,
       body.reporter ? String(body.reporter).slice(0, 64) : null,
       now,
-      check.source),
+      check.source,
+      check.hasPlay ? 1 : 0),
   ];
 
   for (const p of body.players) {
@@ -165,6 +196,14 @@ async function ingest(request, env, origin) {
         stmts.push(env.DB.prepare(
           "INSERT INTO deck_cards (duel_id, seat, zone, card_id, qty) VALUES (?, ?, ?, ?, ?)")
           .bind(check.id, seat, zone, cardId, qty));
+      }
+    }
+
+    if (check.hasPlay) {
+      for (const row of playedRows(p)) {
+        stmts.push(env.DB.prepare(
+          "INSERT INTO card_played (duel_id, seat, card_id, activated, summoned) VALUES (?, ?, ?, ?, ?)")
+          .bind(check.id, seat, row.card_id, row.activated, row.summoned));
       }
     }
   }
@@ -210,6 +249,33 @@ async function cardStats(env, origin, url) {
       GROUP BY u.card_id`).bind(...sourceArg).all();
   const usageById = new Map((usage.results || []).map(r => [r.card_id, r]));
 
+  // 사용 통계: 덱에 있던 판을 "썼다 / 안 썼다" 로 나눠 각각의 승패를 센다.
+  // 한 판에 여러 번 써도 1 이다. 사용 기록을 보낸 판(has_play)만 본다.
+  // 사이드에 있던 카드는 그 판에 쓸 수 없으므로 zone 과 상관없이 메인 + 엑스트라만 본다.
+  const played = await env.DB.prepare(
+    `SELECT dc.card_id AS card_id,
+            COUNT(*) AS games,
+            SUM(CASE WHEN cp.card_id IS NOT NULL THEN 1 ELSE 0 END) AS used,
+            SUM(CASE WHEN cp.card_id IS NOT NULL THEN dp.won ELSE 0 END) AS used_wins,
+            SUM(CASE WHEN cp.card_id IS NOT NULL AND d.winner <> 2 THEN 1 ELSE 0 END) AS used_decided,
+            SUM(CASE WHEN cp.card_id IS NULL THEN dp.won ELSE 0 END) AS unused_wins,
+            SUM(CASE WHEN cp.card_id IS NULL AND d.winner <> 2 THEN 1 ELSE 0 END) AS unused_decided,
+            SUM(COALESCE(cp.activated, 0)) AS activated,
+            SUM(COALESCE(cp.summoned, 0))  AS summoned
+       FROM (SELECT DISTINCT duel_id, seat, card_id FROM deck_cards
+              WHERE zone IN ('main', 'extra')) dc
+       JOIN duel_players dp ON dp.duel_id = dc.duel_id AND dp.seat = dc.seat
+       JOIN duels d         ON d.duel_id  = dc.duel_id
+       LEFT JOIN card_played cp
+              ON cp.duel_id = dc.duel_id AND cp.seat = dc.seat AND cp.card_id = dc.card_id
+      WHERE d.hidden = 0 AND d.has_play = 1${sourceSql}
+      GROUP BY dc.card_id`).bind(...sourceArg).all();
+  const playedById = new Map((played.results || []).map(r => [r.card_id, r]));
+
+  const playTotals = await env.DB.prepare(
+    `SELECT COUNT(*) AS duels FROM duels d
+      WHERE d.hidden = 0 AND d.has_play = 1${sourceSql}`).bind(...sourceArg).first();
+
   // 고유 덱은 game_no = 1 인 판만 센다 (사이드 교체 전 원본 리스트)
   const firstGame = " AND (d.game_no IS NULL OR d.game_no <= 1)";
 
@@ -243,8 +309,10 @@ async function cardStats(env, origin, url) {
     total_decks: totals ? totals.decks : 0,
     total_duels: totals ? totals.duels : 0,
     unique_decks: uniqueTotal ? uniqueTotal.n : 0,
+    play_duels: playTotals ? playTotals.duels : 0,
     cards: (rows.results || []).map(r => {
       const u = usageById.get(r.card_id);
+      const pl = playedById.get(r.card_id);
       return {
         id: r.card_id,
         decks: r.decks,
@@ -254,6 +322,17 @@ async function cardStats(env, origin, url) {
         copies: r.copies,
         offered: u ? u.offered : 0,
         taken: u ? u.taken : 0,
+        // 사용 통계 — 사용 기록이 있는 판만 센 값이라 decks 와 분모가 다르다
+        play: pl ? {
+          games: pl.games,
+          used: pl.used,
+          used_wins: pl.used_wins,
+          used_decided: pl.used_decided,
+          unused_wins: pl.unused_wins,
+          unused_decided: pl.unused_decided,
+          activated: pl.activated,
+          summoned: pl.summoned,
+        } : null,
       };
     }),
   }, 200, origin);

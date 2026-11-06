@@ -15,7 +15,8 @@ CREATE TABLE IF NOT EXISTS duels (
   received_at INTEGER NOT NULL,
   hidden      INTEGER NOT NULL DEFAULT 0,  -- 관리자가 걸러낸 기록
   note        TEXT,
-  source      TEXT NOT NULL DEFAULT 'human'  -- human | sim
+  source      TEXT NOT NULL DEFAULT 'human',  -- human | sim
+  has_play    INTEGER NOT NULL DEFAULT 0      -- 이 판이 사용 기록(card_played)을 보냈나
 );
 
 CREATE TABLE IF NOT EXISTS duel_players (
@@ -58,7 +59,22 @@ CREATE TABLE IF NOT EXISTS card_usage (
   FOREIGN KEY (duel_id) REFERENCES duels(duel_id) ON DELETE CASCADE
 );
 
+-- 판마다 한 번이라도 발동 / 소환한 카드. 사람 대전에서 호스트가 보낸다.
+-- 횟수가 아니라 있다 / 없다다 (명칭 턴 제한 때문에 횟수는 변별력이 없다).
+-- 자세한 이유는 migrations/005_card_played.sql.
+CREATE TABLE IF NOT EXISTS card_played (
+  duel_id   TEXT NOT NULL,
+  seat      INTEGER NOT NULL,
+  card_id   INTEGER NOT NULL,
+  activated INTEGER NOT NULL DEFAULT 0,
+  summoned  INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (duel_id, seat, card_id),
+  FOREIGN KEY (duel_id) REFERENCES duels(duel_id) ON DELETE CASCADE
+);
+
 CREATE INDEX IF NOT EXISTS idx_deck_cards_card ON deck_cards(card_id);
+CREATE INDEX IF NOT EXISTS idx_card_played_card ON card_played(card_id);
+CREATE INDEX IF NOT EXISTS idx_duels_has_play   ON duels(has_play);
 CREATE INDEX IF NOT EXISTS idx_card_usage_card ON card_usage(card_id);
 CREATE INDEX IF NOT EXISTS idx_duels_source     ON duels(source);
 CREATE INDEX IF NOT EXISTS idx_players_hash  ON duel_players(deck_hash);

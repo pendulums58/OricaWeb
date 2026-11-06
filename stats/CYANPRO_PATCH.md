@@ -284,6 +284,24 @@ WindBot 은 `windbot.cpp` 에서 항상 `name="[AI] {이름}"` 으로 실행된�
 
 위 `PlayerName()` 과 `JsonEscape()` 가 그 두 가지를 한다.
 
+## 판마다 쓴 카드 (사용 시 승률)
+
+사람 대전은 선택률 대신 "그 판에 한 번이라도 발동·소환한 카드" 를 보낸다.
+이유와 집계 방식은 `README.md` 의 "사용 시 승률" 을 본다. CyanPro 에는 이미
+들어가 있다 (`generic_duel.h` / `generic_duel.cpp`).
+
+- `stat_activated[2]`, `stat_summoned[2]` — 코어 플레이어 0 / 1 별 `std::set<uint32_t>`.
+  `TPResult()` 의 선후공 교체는 듀얼 시작 전에 끝나므로 듀얼 중의 코어 플레이어
+  번호가 `DuelEndProc()` 이 보고하는 seat 와 같다.
+- 듀얼 시작(시드를 정하는 곳)에서 둘 다 비운다. 매치 단위가 아니라 듀얼 단위다.
+- `BeforeParsing()` 에서 `MSG_CHAINING` / `MSG_SUMMONING` / `MSG_SPSUMMONING` /
+  `MSG_FLIPSUMMONING` 의 첫 4바이트(카드 코드)와 그다음 1바이트(위치 정보의
+  컨트롤러)를 읽어 넣는다. `Sending()` 이 뒷면 소환의 코드를 0 으로 지우기
+  전이라 원본이 보인다. 같은 판에 여러 번 써도 set 이라 한 번이다.
+- 보고 JSON 의 플레이어마다 `"activated":[...]`, `"summoned":[...]` 를 붙인다.
+  덱에 있는지는 거르지 않고 그대로 보낸다 — 서버가 그 사람 메인·엑스트라에
+  있는 것만 남긴다.
+
 ## curl 초기화는 이미 돼 있다
 
 `gframe.cpp` 가 시작할 때 `curl_global_init(CURL_GLOBAL_SSL)` 을 부르므로,
