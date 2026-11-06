@@ -298,7 +298,11 @@ WindBot 은 `windbot.cpp` 에서 항상 `name="[AI] {이름}"` 으로 실행된�
   `MSG_FLIPSUMMONING` 의 첫 4바이트(카드 코드)와 그다음 1바이트(위치 정보의
   컨트롤러)를 읽어 넣는다. `Sending()` 이 뒷면 소환의 코드를 0 으로 지우기
   전이라 원본이 보인다. 같은 판에 여러 번 써도 set 이라 한 번이다.
-- 보고 JSON 의 플레이어마다 `"activated":[...]`, `"summoned":[...]` 를 붙인다.
+- `stat_fetched[2]` 와 `stat_opening` — 듀얼 시작부터 1턴 스탠바이 페이즈 전까지 효과로
+  덱에서 패로 온 카드(`MSG_MOVE`: 출발 `LOCATION_DECK`, 도착 `LOCATION_HAND`, 이유에
+  `REASON_EFFECT` 가 있고 `REASON_DRAW` 는 없음). 단짝 지정으로 +1 을 얻은 판을 잡는다.
+  `MSG_NEW_PHASE` 가 `PHASE_STANDBY` 이상이면 창을 닫는다. 시작 손패는 `MSG_DRAW` 라 안 섞인다.
+- 보고 JSON 의 플레이어마다 `"activated":[...]`, `"summoned":[...]`, `"fetched":[...]` 를 붙인다.
   덱에 있는지는 거르지 않고 그대로 보낸다 — 서버가 그 사람 메인·엑스트라에
   있는 것만 남긴다.
 

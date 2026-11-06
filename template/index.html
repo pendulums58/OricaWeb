@@ -502,6 +502,7 @@ let allocations = { ranges: [], setcodes: [], issues: [], rules: {} };
 let stats = null;   // null = 끄거나 아직 못 받음
 let deckStats = null;
 let lflist = { name: null, limits: new Map(), issues: [] };
+let nameDeck = () => ({ name: "", manual: false });
 let openState = null;
 let icons = {};
 const cache = new Map();
@@ -643,13 +644,14 @@ async function loadAll() {
   const card = CONFIG.cardRepo, engine = CONFIG.engineRepo;
 
   showProgress("설정을 읽는 중", 0.05);
-  const [extraTypes, packMeta, allocSrc, iconMap, webpList, lflistSrc] = await Promise.all([
+  const [extraTypes, packMeta, allocSrc, iconMap, webpList, lflistSrc, decksMeta] = await Promise.all([
     grabJson("types.extra.json", {}),
     grabJson("packs.meta.json", {}),
     grabJson("allocations.json", { ranges: [], setcodes: [] }),
     grabJson("data/icons.json", {}),
     grabJson("data/webp.json", null),
     grabJson("lflist.json", null),
+    grabJson("decks.meta.json", {}),
   ]);
   icons = iconMap || {};
   webpSet = Array.isArray(webpList) ? new Set(webpList) : null;
@@ -710,6 +712,8 @@ async function loadAll() {
 
   showProgress("할당표를 대조하는 중", 0.92);
   allocations = OricaDecode.reconcile(allocSrc, rows, built.nameOf, built.usedIds);
+  // 덱 통계의 레시피 이름. 카드군 이름표와 cdb 별 주 카드군을 여기서 한 번 만든다
+  nameDeck = OricaDecode.deckNamer(built.allCards, allocations.setcodes, decksMeta);
 
   // 금제. 없으면 전 카드 3장으로 돌아간다
   lflist = OricaDecode.parseLflist(lflistSrc, built.aliasOf);
@@ -1235,7 +1239,7 @@ async function renderStats() {
   heads.push("승률");
   if (showPlay) heads.push("사용률", "사용 시 승률", "미사용 시 승률", "차이");
   const headTips = {
-    "사용률": "덱에 있던 판 중 한 번이라도 발동하거나 소환한 판의 비율. 한 판에 여러 번 써도 1 로 센다",
+    "사용률": "덱에 있던 판 중 한 번이라도 발동·소환했거나, 개시 때 덱에서 패로 가져온 판의 비율. 한 판에 여러 번 써도 1 로 센다",
     "사용 시 승률": "그 카드를 쓴 판의 승률. 이기는 판일수록 카드를 많이 쓰므로 거의 모든 카드가 덱 승률보다 높게 나온다",
     "미사용 시 승률": "덱에는 있었지만 쓰지 않은 판의 승률",
     "차이": "사용 시 승률 − 미사용 시 승률. 클수록 그 카드를 쓰느냐가 판을 가른다",
@@ -1277,9 +1281,13 @@ async function renderStats() {
     rows.sort((a, b) => {
       if (mode === "name") return a.name.localeCompare(b.name, "ko");
       if (mode === "win") {
-        const aw = a.decided >= MIN_SAMPLE && a.w ? a.w.lo : -1;
-        const bw = b.decided >= MIN_SAMPLE && b.w ? b.w.lo : -1;
-        return bw - aw;
+        // 보이는 숫자(승률)로 정렬한다. 신뢰구간 하한으로 정렬하면 70%(n=20)가
+        // 55%(n=200) 밑으로 가서 화면의 숫자와 순서가 안 맞는다.
+        // 표본이 모자란 카드는 뒤로 보내되, 그 안에서도 승률 순으로 둔다.
+        const as = a.decided >= MIN_SAMPLE, bs = b.decided >= MIN_SAMPLE;
+        if (as !== bs) return as ? -1 : 1;
+        const ap = a.w ? a.w.p : -1, bp = b.w ? b.w.p : -1;
+        return bp - ap || b.decided - a.decided;
       }
       if (mode === "used") return (b.usedRate ?? -1) - (a.usedRate ?? -1);
       if (mode === "impact") {
@@ -1351,7 +1359,8 @@ async function renderStats() {
           track.append(fill);
           sb.append(track, el("span", "pct", (r.usedRate * 100).toFixed(0) + "%"));
           sb.title = `덱에 있던 ${pl.games}판 중 ${pl.used}판에서 썼다`
-            + ` (발동 ${pl.activated}판 · 소환 ${pl.summoned}판)`;
+            + ` (발동 ${pl.activated}판 · 소환 ${pl.summoned}판`
+            + (pl.fetched ? ` · 개시 때 패로 가져옴 ${pl.fetched}판` : "") + ")";
           uTd.append(sb);
         } else {
           uTd.append(el("span", "wr thin", "—"));
@@ -1431,7 +1440,8 @@ async function renderStats() {
     const playNote = el("p", "hint");
     playNote.style.cssText = "margin-top:12px;font-size:11.5px;color:var(--fg-faint);line-height:1.7";
     playNote.textContent =
-      "사용은 그 판에 한 번이라도 발동하거나 소환한 것이다. 여러 번 써도 한 번으로 센다. "
+      "사용은 그 판에 한 번이라도 발동하거나 소환한 것, 또는 듀얼 개시 때 덱에서 패로 가져온 것(단짝 지정)이다. "
+      + "여러 번 써도 한 번으로 센다. 이미 손에 있던 단짝을 지정한 판은 이득이 없으므로 사용으로 치지 않는다. "
       + "소재나 코스트로만 쓰인 카드는 사용으로 잡히지 않는다. "
       + "사용 시 승률은 혼자 보면 안 된다 — 이기는 판일수록 카드를 많이 쓰게 되니 거의 모든 카드가 "
       + "높게 나온다. 미사용 시 승률과의 차이를, 같은 덱의 다른 카드와 견줘서 봐라.";
@@ -1531,18 +1541,26 @@ async function renderDeckStats() {
     return box;
   };
 
+  // 카드마다 몇 개 레시피에 들어갔나. 이름 후보가 동률일 때 그 덱에 더 고유한 카드를 고른다
+  const spread = new Map();
+  for (const d of decks)
+    for (const id of new Set([...(d.deck.main || []), ...(d.deck.extra || [])].map(c => c.id)))
+      spread.set(id, (spread.get(id) || 0) + 1);
+
   for (const d of decks) {
     const tr = document.createElement("tr");
     tr.className = "deckrow";
 
     const nameTd = document.createElement("td");
-    const top = (d.deck.main || []).slice()
-      .sort((a, b) => b.qty - a.qty)
-      .map(c => (byId.get(c.id) || {}).name)
-      .filter(Boolean).slice(0, 2).join(" · ");
+    const named = nameDeck(d.deck, d.hash, byId, spread);
     const holder = el("div", "statname");
-    holder.append(el("b", null, top || "구성 없음"));
-    nameTd.append(holder, el("div", "rec", d.hash.slice(0, 10)));
+    holder.append(el("b", null, named.name || "구성 없음"));
+    nameTd.append(holder);
+    const rec = el("div", "rec", d.hash.slice(0, 10));
+    rec.title = named.manual
+      ? "decks.meta.json 에 직접 적은 이름이다"
+      : "이 지문을 decks.meta.json 의 names 에 적으면 이름을 바꿀 수 있다";
+    nameTd.append(rec);
     tr.append(nameTd);
 
     tr.append(el("td", "num", String(d.matches)));

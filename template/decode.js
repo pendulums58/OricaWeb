@@ -154,6 +154,13 @@
       deckable: !(typeValue & (TYPE_TOKEN | TYPE_UNLOCKED)) && !((row.ot || 0) & SCOPE_HIDDEN),
       source,
     };
+    // 카드군 코드. setcode 는 16비트씩 네 칸이다. 덱 이름을 지을 때 쓴다
+    const setcodes = [];
+    for (let slot = 0; slot < 4; slot++) {
+      const part = Number((BigInt(row.setcode || 0) >> BigInt(slot * 16)) & 0xFFFFn);
+      if (part) setcodes.push(part);
+    }
+    if (setcodes.length) card.setcodes = setcodes;
     if (parsed.number) { card.number = parsed.number; card.seq = parsed.seq; card.packCode = parsed.code; }
     if (parsed.packName) card.packName = parsed.packName;
     if (parsed.credits.length) card.credits = parsed.credits;
@@ -381,6 +388,7 @@
       else seenCodes.set(base, sc.name || "");
       setcodes.push({
         code: raw, value, name: sc.name || "", owner: sc.owner || "", note: sc.note || "",
+        short: sc.short ? String(sc.short) : "",   // 덱 이름에 쓸 짧은 이름 (선택)
         used: usedCodes.get(value) || 0,
         cards: codeCards.get(value) || [],
       });
@@ -526,8 +534,115 @@
     return out;
   }
 
+  /* ---------- 덱 레시피 이름 ----------
+   *
+   * 이름은 "A B" 꼴이다. B 는 카드군, A 는 단짝 같은 앞말이고 없을 수 있다.
+   *   자이루다 마칭 파이어 / 스카이워커 / 요리온 스카이워커 도와줘
+   *
+   * B — 메인 + 엑스트라에서 카드군별 매수를 센다.
+   *   · [태그 : 범용] 카드는 세지 않는다. 범용은 A 후보로만 본다.
+   *   · 카드군 이름은 allocations.json 의 setcodes (short 가 있으면 그것).
+   *   · 카드군 코드가 없는 카드는 그 카드가 든 cdb 의 주 카드군으로 친다.
+   *     카드군 전용 cdb 에는 코드 없는 지원 카드("살려줘" 같은)가 섞여 있다.
+   *     주 카드군은 그 cdb 의 범용 아닌 카드 과반이 속한 카드군이다.
+   *   · 2위 카드군이 1위의 1/3 이상이면 둘 다 쓴다.
+   * A — 메인에 앞말 태그(기본 "단짝") 카드가 정확히 한 종류일 때 그 카드의 약칭.
+   *   둘 이상이면 무엇을 지정했는지 레시피만으로는 알 수 없으므로 비운다.
+   *   약칭은 decks.meta.json 의 short, 없으면 "수식어, 이름" 의 쉼표 뒤, 없으면 이름 그대로.
+   * 둘 다 없으면 — 범용 아닌 카드 중 매수가 많고 다른 레시피에 덜 나오는 카드.
+   * decks.meta.json 의 names 에 지문(앞 6자 이상)으로 적은 이름이 언제나 우선한다. */
+
+  const tagsOfCard = c => (c && c.labels && c.labels["태그"]) || [];
+
+  /* 카드군 이름표와 cdb 별 주 카드군을 한 번 만들어 둔다 */
+  function deckNamer(allCards, setcodes, meta) {
+    const m = meta || {};
+    const arch = new Map();   // 카드군 base(하위 12비트) -> 표시 이름
+    for (const sc of setcodes || []) {
+      if (!Number.isFinite(sc.value)) continue;
+      arch.set(sc.value & 0xFFF, sc.short || sc.name || "");
+    }
+    const prefixTags = Array.isArray(m.prefixTags) ? m.prefixTags : ["단짝"];
+    const shortById = new Map(Object.entries(m.short || {}).map(([k, v]) => [Number(k), String(v)]));
+    const names = Object.entries(m.names || {})
+      .filter(([k]) => /^[0-9a-f]{6,}$/i.test(k))
+      .map(([k, v]) => [k.toLowerCase(), String(v)]);
+
+    const isGeneric = c => tagsOfCard(c).includes("범용");
+    const ownArch = c => [...new Set((c.setcodes || []).map(v => v & 0xFFF))].filter(b => arch.has(b));
+
+    // cdb 마다 범용 아닌 카드의 과반이 속한 카드군
+    const bySource = new Map();
+    for (const c of allCards || []) {
+      if (isGeneric(c) || !c.source) continue;
+      const s = bySource.get(c.source) || { n: 0, tally: new Map() };
+      s.n++;
+      for (const b of ownArch(c)) s.tally.set(b, (s.tally.get(b) || 0) + 1);
+      bySource.set(c.source, s);
+    }
+    const sourceArch = new Map();
+    for (const [src, s] of bySource) {
+      const top = [...s.tally].sort((a, b) => b[1] - a[1])[0];
+      if (top && top[1] * 2 > s.n) sourceArch.set(src, top[0]);
+    }
+
+    const archOf = c => {
+      const own = ownArch(c);
+      if (own.length) return own;
+      const fromSource = sourceArch.get(c.source);
+      return fromSource !== undefined ? [fromSource] : [];
+    };
+    const shortName = c => {
+      if (shortById.has(c.id)) return shortById.get(c.id);
+      if (c.family && shortById.has(c.family)) return shortById.get(c.family);
+      const i = c.name.lastIndexOf(",");
+      return i >= 0 && c.name.slice(i + 1).trim() ? c.name.slice(i + 1).trim() : c.name;
+    };
+
+    /* deck = { main:[{id,qty}], extra:[...] }, hash = 레시피 지문,
+       spread = 카드 ID -> 그 카드가 든 레시피 수 (고유한 카드를 고를 때 쓴다) */
+    return function nameDeck(deck, hash, byId, spread) {
+      const h = String(hash || "").toLowerCase();
+      for (const [k, v] of names) if (h.startsWith(k)) return { name: v, manual: true };
+
+      const lines = [...(deck.main || []), ...(deck.extra || [])]
+        .map(x => ({ card: byId.get(x.id), qty: x.qty || 1 }))
+        .filter(x => x.card);
+
+      const tally = new Map();
+      for (const { card, qty } of lines) {
+        if (isGeneric(card)) continue;
+        for (const b of archOf(card)) tally.set(b, (tally.get(b) || 0) + qty);
+      }
+      const ranked = [...tally].sort((a, b) => b[1] - a[1] || arch.get(a[0]).localeCompare(arch.get(b[0]), "ko"));
+      const bParts = [];
+      if (ranked[0]) bParts.push(arch.get(ranked[0][0]));
+      if (ranked[1] && ranked[1][1] * 3 >= ranked[0][1]) bParts.push(arch.get(ranked[1][0]));
+
+      // 앞말: 메인에 있는 앞말 태그 카드, 같은 카드의 일러스트는 하나로 친다
+      const prefixFamilies = new Map();
+      for (const x of deck.main || []) {
+        const c = byId.get(x.id);
+        if (c && tagsOfCard(c).some(t => prefixTags.includes(t)))
+          prefixFamilies.set(c.family || c.id, c);
+      }
+      const a = prefixFamilies.size === 1 ? shortName([...prefixFamilies.values()][0]) : "";
+
+      let b = bParts.filter(Boolean).join(" ");
+      if (!b && !a) {
+        const pool = lines.filter(x => !isGeneric(x.card));
+        pool.sort((x, y) => y.qty - x.qty
+          || ((spread && spread.get(x.card.id)) || 0) - ((spread && spread.get(y.card.id)) || 0)
+          || x.card.id - y.card.id);
+        b = pool.length ? pool[0].card.name : "범용";
+      }
+      return { name: [a, b].filter(Boolean).join(" "), a, b, manual: false };
+    };
+  }
+
   global.OricaDecode = {
     buildAll, reconcile, parseConstants, parseLflist, describe, splitDesc, parseMeta,
+    deckNamer,
     TYPE_UNLOCKED, TYPE_KEY, ART_SPAN,
   };
 })(typeof window !== "undefined" ? window : globalThis);

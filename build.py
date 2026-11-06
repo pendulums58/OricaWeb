@@ -22,6 +22,7 @@ SITE_FILES = [
     "packs.meta.json",
     "allocations.json",
     "lflist.json",
+    "decks.meta.json",
 ]
 
 # template/ 에서 dist/ 루트로 그대로 옮기는 파일들

@@ -16,7 +16,8 @@ CREATE TABLE IF NOT EXISTS duels (
   hidden      INTEGER NOT NULL DEFAULT 0,  -- 관리자가 걸러낸 기록
   note        TEXT,
   source      TEXT NOT NULL DEFAULT 'human',  -- human | sim
-  has_play    INTEGER NOT NULL DEFAULT 0      -- 이 판이 사용 기록(card_played)을 보냈나
+  has_play    INTEGER NOT NULL DEFAULT 0,     -- 이 판이 사용 기록(card_played)을 보냈나
+  has_fetch   INTEGER NOT NULL DEFAULT 0      -- 그중 개시 가져옴(fetched)까지 보냈나
 );
 
 CREATE TABLE IF NOT EXISTS duel_players (
@@ -68,6 +69,7 @@ CREATE TABLE IF NOT EXISTS card_played (
   card_id   INTEGER NOT NULL,
   activated INTEGER NOT NULL DEFAULT 0,
   summoned  INTEGER NOT NULL DEFAULT 0,
+  fetched   INTEGER NOT NULL DEFAULT 0,  -- 개시 때 덱에서 패로 가져왔나 (단짝 지정). 006 참고
   PRIMARY KEY (duel_id, seat, card_id),
   FOREIGN KEY (duel_id) REFERENCES duels(duel_id) ON DELETE CASCADE
 );

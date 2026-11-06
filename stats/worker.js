@@ -71,8 +71,9 @@ function validate(body) {
     if (p.player_no !== undefined &&
         (!Number.isInteger(p.player_no) || p.player_no < 0 || p.player_no > 7))
       return fail("player_no 가 올바르지 않다");
-    // 이 판에 한 번이라도 발동 / 소환한 카드 코드. 호스트가 가공 없이 보낸다
-    for (const k of ["activated", "summoned"]) {
+    // 이 판에 한 번이라도 발동 / 소환한 카드, 개시 때 덱에서 패로 가져온 카드.
+    // 호스트가 가공 없이 보낸다
+    for (const k of ["activated", "summoned", "fetched"]) {
       const list = p[k];
       if (list === undefined) continue;
       if (!Array.isArray(list)) return fail(`${k} 가 배열이 아니다`);
@@ -98,7 +99,10 @@ function validate(body) {
   // 패치 전 호스트가 보낸 판을 "아무것도 안 쓴 판" 으로 세면 미사용 승률이 망가진다.
   const hasPlay = body.players.every(p =>
     Array.isArray(p.activated) && Array.isArray(p.summoned));
-  return { ok: true, id, winner, source, hasPlay };
+  // fetched 는 1.0.8 다음 빌드부터 온다. 1.0.8 판도 사용 통계에는 넣되,
+  // 그 판들은 가져옴을 모른다는 표시를 따로 남긴다.
+  const hasFetch = hasPlay && body.players.every(p => Array.isArray(p.fetched));
+  return { ok: true, id, winner, source, hasPlay, hasFetch };
 }
 
 /* 메인 + 엑스트라 구성의 지문. 같은 레시피면 같은 값이 나온다.
@@ -131,10 +135,14 @@ function playedRows(p) {
   const inDeck = new Set([...(deck.main || []), ...(deck.extra || [])]);
   const act = new Set((p.activated || []).filter(c => inDeck.has(c)));
   const sum = new Set((p.summoned || []).filter(c => inDeck.has(c)));
-  return [...new Set([...act, ...sum])].sort((a, b) => a - b).map(card_id => ({
+  // 개시 때 덱에서 패로 온 카드. 단짝 지정으로 +1 을 얻은 경우가 이것이다.
+  // 이미 손에 있던 단짝을 지정한 판은 이득이 없으므로 호스트가 애초에 보내지 않는다.
+  const fet = new Set((p.fetched || []).filter(c => inDeck.has(c)));
+  return [...new Set([...act, ...sum, ...fet])].sort((a, b) => a - b).map(card_id => ({
     card_id,
     activated: act.has(card_id) ? 1 : 0,
     summoned: sum.has(card_id) ? 1 : 0,
+    fetched: fet.has(card_id) ? 1 : 0,
   }));
 }
 
@@ -161,8 +169,8 @@ async function ingest(request, env, origin) {
   const stmts = [
     env.DB.prepare(
       `INSERT INTO duels (duel_id, match_id, game_no, format, winner, ended_at,
-                          version, reporter, received_at, source, has_play)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(
+                          version, reporter, received_at, source, has_play, has_fetch)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(
       check.id,
       body.match_id ? String(body.match_id).slice(0, 64) : null,
       Number.isFinite(Number(body.game_no)) ? Number(body.game_no) : null,
@@ -173,7 +181,8 @@ async function ingest(request, env, origin) {
       body.reporter ? String(body.reporter).slice(0, 64) : null,
       now,
       check.source,
-      check.hasPlay ? 1 : 0),
+      check.hasPlay ? 1 : 0,
+      check.hasFetch ? 1 : 0),
   ];
 
   for (const p of body.players) {
@@ -202,8 +211,8 @@ async function ingest(request, env, origin) {
     if (check.hasPlay) {
       for (const row of playedRows(p)) {
         stmts.push(env.DB.prepare(
-          "INSERT INTO card_played (duel_id, seat, card_id, activated, summoned) VALUES (?, ?, ?, ?, ?)")
-          .bind(check.id, seat, row.card_id, row.activated, row.summoned));
+          "INSERT INTO card_played (duel_id, seat, card_id, activated, summoned, fetched) VALUES (?, ?, ?, ?, ?, ?)")
+          .bind(check.id, seat, row.card_id, row.activated, row.summoned, row.fetched));
       }
     }
   }
@@ -250,6 +259,7 @@ async function cardStats(env, origin, url) {
   const usageById = new Map((usage.results || []).map(r => [r.card_id, r]));
 
   // 사용 통계: 덱에 있던 판을 "썼다 / 안 썼다" 로 나눠 각각의 승패를 센다.
+  // 썼다 = 발동 · 소환 · 개시 때 덱에서 패로 가져옴 중 하나라도 (card_played 에 행이 있다).
   // 한 판에 여러 번 써도 1 이다. 사용 기록을 보낸 판(has_play)만 본다.
   // 사이드에 있던 카드는 그 판에 쓸 수 없으므로 zone 과 상관없이 메인 + 엑스트라만 본다.
   const played = await env.DB.prepare(
@@ -261,7 +271,8 @@ async function cardStats(env, origin, url) {
             SUM(CASE WHEN cp.card_id IS NULL THEN dp.won ELSE 0 END) AS unused_wins,
             SUM(CASE WHEN cp.card_id IS NULL AND d.winner <> 2 THEN 1 ELSE 0 END) AS unused_decided,
             SUM(COALESCE(cp.activated, 0)) AS activated,
-            SUM(COALESCE(cp.summoned, 0))  AS summoned
+            SUM(COALESCE(cp.summoned, 0))  AS summoned,
+            SUM(COALESCE(cp.fetched, 0))   AS fetched
        FROM (SELECT DISTINCT duel_id, seat, card_id FROM deck_cards
               WHERE zone IN ('main', 'extra')) dc
        JOIN duel_players dp ON dp.duel_id = dc.duel_id AND dp.seat = dc.seat
@@ -273,7 +284,7 @@ async function cardStats(env, origin, url) {
   const playedById = new Map((played.results || []).map(r => [r.card_id, r]));
 
   const playTotals = await env.DB.prepare(
-    `SELECT COUNT(*) AS duels FROM duels d
+    `SELECT COUNT(*) AS duels, SUM(d.has_fetch) AS fetch_duels FROM duels d
       WHERE d.hidden = 0 AND d.has_play = 1${sourceSql}`).bind(...sourceArg).first();
 
   // 고유 덱은 game_no = 1 인 판만 센다 (사이드 교체 전 원본 리스트)
@@ -310,6 +321,8 @@ async function cardStats(env, origin, url) {
     total_duels: totals ? totals.duels : 0,
     unique_decks: uniqueTotal ? uniqueTotal.n : 0,
     play_duels: playTotals ? playTotals.duels : 0,
+    // 그중 개시 가져옴까지 기록된 판. 나머지 판에서는 가져오기만 한 단짝이 미사용으로 잡힌다
+    fetch_duels: playTotals ? (playTotals.fetch_duels || 0) : 0,
     cards: (rows.results || []).map(r => {
       const u = usageById.get(r.card_id);
       const pl = playedById.get(r.card_id);
@@ -332,6 +345,7 @@ async function cardStats(env, origin, url) {
           unused_decided: pl.unused_decided,
           activated: pl.activated,
           summoned: pl.summoned,
+          fetched: pl.fetched,
         } : null,
       };
     }),
