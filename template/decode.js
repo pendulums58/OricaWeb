@@ -60,6 +60,8 @@
   // ot 는 카드가 어느 룰에 속하는지를 담는다. HIDDEN 은 덱에 넣을 수 없다.
   const SCOPE_HIDDEN = 0x1000;
   const ART_SPAN = 10;
+  // 이 미만의 ID 는 공식 카드다. 오리카는 9자리(1억 이상)를 쓴다
+  const ORICA_ID_MIN = 100000000;
 
   const bits = (value, table) => table.filter(r => value & r[0]).map(r => r[1]);
   const one = (value, table) => {
@@ -337,7 +339,6 @@
         owner: r.owner || "",
         purpose: r.purpose || r.archetype || "",
         note: r.note || "",
-        status: r.status || "active",
         used: inside.length,
         next_free: nextFree,
         cards: inside.map(i => ({ id: i, name: nameOf.get(i) || "" })),
@@ -352,7 +353,9 @@
     }
 
     const inAny = i => ranges.some(r => i >= r.from && i <= r.to);
-    const orphans = usedIds.filter(i => !inAny(i));
+    // 1억 미만은 공식 카드(실카)다. 카드군이 자기 덱에 쓰려고 한두 장 들고 오는
+    // 경우라 예약 구간과 상관없다
+    const orphans = usedIds.filter(i => i >= ORICA_ID_MIN && !inAny(i));
     orphans.slice(0, 50).forEach(i =>
       issues.push({ kind: "orphan", detail: `${i} (${nameOf.get(i) || "?"}) 가 예약 구간 밖에서 쓰이고 있다` }));
     if (orphans.length > 50)
@@ -383,9 +386,11 @@
       const base = value & 0xFFF;
       if (base <= 0x208)
         issues.push({ kind: "setcode", detail: `${raw} (${sc.name || ""}) 는 공식 카드군 대역(0x208 이하)이다` });
-      if (seenCodes.has(base))
-        issues.push({ kind: "setcode", detail: `${raw} 가 '${seenCodes.get(base)}' 와 '${sc.name || ""}' 에 중복 할당됐다` });
-      else seenCodes.set(base, sc.name || "");
+      // setcode 는 하위 12비트가 카드군, 상위 4비트가 하위 카드군이다. 0x1307 은
+      // 0x307 의 하위 카드군이라 정상이므로, 16비트 값이 똑같을 때만 중복으로 본다
+      if (seenCodes.has(value))
+        issues.push({ kind: "setcode", detail: `${raw} 가 '${seenCodes.get(value)}' 와 '${sc.name || ""}' 에 중복 할당됐다` });
+      else seenCodes.set(value, sc.name || "");
       setcodes.push({
         code: raw, value, name: sc.name || "", owner: sc.owner || "", note: sc.note || "",
         short: sc.short ? String(sc.short) : "",   // 덱 이름에 쓸 짧은 이름 (선택)
@@ -557,10 +562,16 @@
   /* 카드군 이름표와 cdb 별 주 카드군을 한 번 만들어 둔다 */
   function deckNamer(allCards, setcodes, meta) {
     const m = meta || {};
-    const arch = new Map();   // 카드군 base(하위 12비트) -> 표시 이름
+    // 카드군 base(하위 12비트) -> 표시 이름. 하위 카드군(0x1307)은 상위(0x307)로
+    // 묶어 센다 — 엔진에서도 0x1307 카드는 0x307 카드군에 속한다. 그래서 이름은
+    // base 와 값이 같은 상위 카드군 것을 쓰고, 상위가 등록돼 있지 않을 때만
+    // 하위 카드군 이름을 빌린다.
+    const arch = new Map();
     for (const sc of setcodes || []) {
       if (!Number.isFinite(sc.value)) continue;
-      arch.set(sc.value & 0xFFF, sc.short || sc.name || "");
+      const base = sc.value & 0xFFF;
+      const label = sc.short || sc.name || "";
+      if (sc.value === base || !arch.has(base)) arch.set(base, label);
     }
     const prefixTags = Array.isArray(m.prefixTags) ? m.prefixTags : ["단짝"];
     const shortById = new Map(Object.entries(m.short || {}).map(([k, v]) => [Number(k), String(v)]));

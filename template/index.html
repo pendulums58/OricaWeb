@@ -236,9 +236,6 @@ table.sheet td.who.none{font-weight:400;color:var(--fg-faint);font-style:italic}
 .gbar i.full{background:var(--f-trap)}
 .gbar i.high{background:var(--f-gift)}
 .gnum{font-family:var(--font-mono);font-size:11px;color:var(--fg-dim);white-space:nowrap;font-variant-numeric:tabular-nums}
-.statetag{font-size:10.5px;border-radius:999px;padding:2px 9px;border:1px solid var(--line);color:var(--fg-dim);white-space:nowrap}
-.statetag.active{border-color:var(--accent);color:var(--accent)}
-.statetag.done{border-color:var(--f-synchro);color:var(--f-synchro)}
 .rowcards{font-size:11.5px;color:var(--fg-dim)}
 .rowcards button{font-size:11.5px;color:var(--accent);text-decoration:underline;padding:0}
 .subrow td{background:var(--surface-2);padding-top:4px;padding-bottom:10px}
@@ -1659,7 +1656,8 @@ function renderAlloc() {
   const t1 = el("table", "sheet");
   const thead1 = document.createElement("thead");
   const hr1 = document.createElement("tr");
-  for (const h of ["구간", "담당", "용도", "사용량", "다음 빈 번호", "상태", "비고"])
+  // 구간은 공간을 잡아두는 것이지 다 채울 목표가 아니라서 "진행 중 / 완료" 같은 상태를 두지 않는다
+  for (const h of ["구간", "담당", "용도", "사용량", "다음 빈 번호", "비고"])
     hr1.append(el("th", null, h));
   thead1.append(hr1);
   t1.append(thead1);
@@ -1668,7 +1666,7 @@ function renderAlloc() {
   if (!allocations.ranges.length) {
     const tr = document.createElement("tr");
     const td = el("td", null, "아직 예약된 구간이 없다. allocations.json 에 추가하면 여기 나온다.");
-    td.colSpan = 7; td.style.cssText = "color:var(--fg-faint);padding:22px 12px;text-align:center";
+    td.colSpan = 6; td.style.cssText = "color:var(--fg-faint);padding:22px 12px;text-align:center";
     tr.append(td); tb1.append(tr);
   }
   for (const r of allocations.ranges) {
@@ -1691,10 +1689,6 @@ function renderAlloc() {
     tr.append(g);
 
     tr.append(el("td", "id", r.next_free == null ? "가득 참" : fmtId(r.next_free)));
-    const st = el("td");
-    st.append(el("span", "statetag " + (r.status === "active" ? "active" : "done"),
-                 r.status === "active" ? "진행 중" : r.status));
-    tr.append(st);
 
     const note = el("td", "rowcards");
     note.append(document.createTextNode(r.note || ""));
@@ -1706,7 +1700,7 @@ function renderAlloc() {
       sub.className = "subrow";
       sub.hidden = true;
       const subtd = document.createElement("td");
-      subtd.colSpan = 7;
+      subtd.colSpan = 6;
       const list = el("div", "cardlist");
       for (const c of r.cards) list.append(el("span", null, `${c.id} ${c.name}`));
       subtd.append(list);
@@ -1796,10 +1790,13 @@ function renderAlloc() {
   { "from": 130000100, "to": 130000199,
     "owner": "스크립터 이름",
     "purpose": "범용 팩",       // 자유 텍스트
-    "note": "", "status": "active" }
+    "note": "" }
 ],
 "setcodes": [
   { "code": "0x301", "name": "카드군 이름",
+    "owner": "스크립터 이름", "note": "",
+    "short": "" },              // 덱 이름에 쓸 짧은 이름 (선택)
+  { "code": "0x1301", "name": "하위 카드군",   // 상위 4비트만 다르면 0x301 의 하위 카드군
     "owner": "스크립터 이름", "note": "" }
 ]`;
   how.append(pre);
