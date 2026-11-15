@@ -239,6 +239,15 @@ table.sheet td.who.none{font-weight:400;color:var(--fg-faint);font-style:italic}
 .rowcards{font-size:11.5px;color:var(--fg-dim)}
 .rowcards button{font-size:11.5px;color:var(--accent);text-decoration:underline;padding:0}
 .subrow td{background:var(--surface-2);padding-top:4px;padding-bottom:10px}
+/* 카드군 코드 표: 하위 카드군 */
+.subtoggle{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer;display:inline-flex;align-items:center;gap:6px;text-align:left}
+.subtoggle .caret{display:inline-block;font-size:10px;color:var(--fg-faint);transition:transform .12s}
+.subtoggle[aria-expanded=true] .caret{transform:rotate(90deg)}
+.subtoggle .subcount{font-size:10.5px;color:var(--fg-faint);border:1px solid var(--line);border-radius:999px;padding:0 7px}
+.subtoggle:hover{color:var(--accent)}
+table.sheet tr.childrow{background:var(--surface-2)}
+table.sheet tr.childrow td.code{padding-left:22px}
+table.sheet tr.childrow td.code::before{content:"└ ";color:var(--fg-faint)}
 .cardlist{display:flex;flex-wrap:wrap;gap:5px}
 .cardlist span{font-size:11px;font-family:var(--font-mono);background:var(--surface);
   border:1px solid var(--line);border-radius:6px;padding:2px 8px}
@@ -1743,37 +1752,85 @@ function renderAlloc() {
     td.colSpan = 5; td.style.cssText = "color:var(--fg-faint);padding:22px 12px;text-align:center";
     tr.append(td); tb2.append(tr);
   }
+  // 하위 카드군(0x1307 = 상위 4비트만 다른 0x307)은 상위 행을 펼쳐야 보이게 한다.
+  // 상위가 등록돼 있지 않은 하위 카드군은 숨을 곳이 없으므로 맨 위 단계에 둔다.
+  const declaredValues = new Set(allocations.setcodes.map(sc => sc.value));
+  const isChild = sc => sc.value !== (sc.value & 0xFFF) && declaredValues.has(sc.value & 0xFFF);
+  const childrenOf = new Map();
   for (const sc of allocations.setcodes) {
+    if (!isChild(sc)) continue;
+    const base = sc.value & 0xFFF;
+    if (!childrenOf.has(base)) childrenOf.set(base, []);
+    childrenOf.get(base).push(sc);
+  }
+
+  // 한 카드군의 행과, 그 행의 "N장" 을 누르면 열리는 카드 목록 행
+  const setcodeRows = (sc, child) => {
     const tr = document.createElement("tr");
+    if (child) tr.className = "childrow";
     tr.append(el("td", "code", sc.code));
-    tr.append(el("td", null, sc.name || "—"));
+    const nameTd = el("td");
+    nameTd.append(el("span", null, sc.name || "—"));
+    tr.append(nameTd);
     tr.append(el("td", "who" + (sc.owner ? "" : " none"), sc.owner || "미배정"));
 
     const uc = el("td", "num");
+    let cardRow = null;
     if (sc.used) {
       const btn = el("button", null, `${sc.used}장`);
       btn.style.cssText = "font-family:var(--font-mono);color:var(--accent);text-decoration:underline;padding:0";
-      const sub = document.createElement("tr");
-      sub.className = "subrow"; sub.hidden = true;
+      cardRow = document.createElement("tr");
+      cardRow.className = "subrow"; cardRow.hidden = true;
       const subtd = document.createElement("td");
       subtd.colSpan = 5;
       const list = el("div", "cardlist");
       for (const c of sc.cards) list.append(el("span", null, `${c.id} ${c.name}`));
-      subtd.append(list); sub.append(subtd);
-      let open = false;
+      subtd.append(list); cardRow.append(subtd);
       btn.addEventListener("click", () => {
-        open = !open; sub.hidden = !open;
-        btn.textContent = open ? "접기" : `${sc.used}장`;
+        cardRow.hidden = !cardRow.hidden;
+        btn.textContent = cardRow.hidden ? `${sc.used}장` : "접기";
       });
       uc.append(btn);
-      tr.append(uc, el("td", "rowcards", sc.note || ""));
-      tb2.append(tr, sub);
-      continue;
+    } else {
+      uc.append(el("span", null, "0"));
+      uc.style.color = "var(--fg-faint)";
     }
-    uc.append(el("span", null, "0"));
-    uc.style.color = "var(--fg-faint)";
     tr.append(uc, el("td", "rowcards", sc.note || ""));
-    tb2.append(tr);
+    return { tr, nameTd, cardRow, close() {
+      if (cardRow && !cardRow.hidden) uc.querySelector("button").click();
+    } };
+  };
+
+  for (const sc of allocations.setcodes) {
+    if (isChild(sc)) continue;
+    const top = setcodeRows(sc, false);
+    tb2.append(top.tr);
+    if (top.cardRow) tb2.append(top.cardRow);
+
+    const kids = childrenOf.get(sc.value) || [];
+    if (!kids.length) continue;
+    const childRows = kids.map(k => setcodeRows(k, true));
+    for (const k of childRows) {
+      k.tr.hidden = true;
+      tb2.append(k.tr);
+      if (k.cardRow) tb2.append(k.cardRow);
+    }
+    // 카드군 이름 칸이 펼침 단추가 된다
+    const label = top.nameTd.firstChild;
+    const toggle = el("button", "subtoggle");
+    toggle.setAttribute("aria-expanded", "false");
+    toggle.append(el("span", "caret", "▸"), document.createTextNode(sc.name || "—"),
+                  el("span", "subcount", `하위 ${kids.length}`));
+    toggle.title = "하위 카드군 " + kids.map(k => `${k.code} ${k.name}`).join(", ");
+    toggle.addEventListener("click", () => {
+      const open = toggle.getAttribute("aria-expanded") !== "true";
+      toggle.setAttribute("aria-expanded", String(open));
+      for (const k of childRows) {
+        k.tr.hidden = !open;
+        if (!open) k.close();   // 접을 때 하위의 카드 목록도 같이 닫는다
+      }
+    });
+    label.replaceWith(toggle);
   }
   t2.append(tb2);
   wrap2.append(t2);
